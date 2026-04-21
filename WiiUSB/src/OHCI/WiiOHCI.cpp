@@ -69,6 +69,7 @@ bool WiiOHCI::init(OSDictionary *dictionary) {
   _controlEndpointTailPtr = NULL;
   _controlQuirkEndpointPtr = NULL;
   _controlQuirkTailTransferPtr = NULL;
+  bzero(_interruptBranchLoad, sizeof (_interruptBranchLoad));
 
   _freeBounceBufferHeadPtr      = NULL;
   _freeBounceBufferJumboHeadPtr = NULL;

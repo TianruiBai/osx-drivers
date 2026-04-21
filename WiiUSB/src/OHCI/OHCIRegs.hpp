@@ -213,6 +213,12 @@ typedef struct OHCIEndpointData {
   UInt32                  physAddr;
   // Isochronous endpoint?
   bool                    isochronous;
+  // Periodic schedule interval in frames, if this is an interrupt endpoint.
+  UInt8                   periodicInterval;
+  // Periodic schedule branch, if this is an interrupt endpoint.
+  UInt8                   periodicBranch;
+  // Periodic bus time reserved for this endpoint, in microseconds.
+  UInt16                  periodicLoad;
   // Pointer to the tail of the transfer data linked list.
   struct OHCITransferData *transferTail;
   // Pointer to the next endpoint.

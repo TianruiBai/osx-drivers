@@ -210,6 +210,23 @@ void WiiEHCI::updatePortChangeBits(void) {
   }
 }
 
+bool WiiEHCI::hasPendingPortChange(UInt32 usbSts) {
+  if ((usbSts & kEHCIRegUSBStsPortChangeDetect) != 0) {
+    return true;
+  }
+  if (_portResetChangeBitmap != 0) {
+    return true;
+  }
+
+  for (UInt16 port = 1; port <= _numPorts; port++) {
+    if ((readPortReg32(port) & kEHCIRegPortStatusControlChangeMask) != 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 IOReturn WiiEHCI::resetRootHubPort(UInt16 port) {
   UInt16 portBit;
   UInt32 portStatus;
@@ -1777,6 +1794,7 @@ UInt32 WiiEHCI::GetFrameNumber32(void) {
 
 void WiiEHCI::PollInterrupts(IOUSBCompletionAction safeAction) {
   UInt32 usbSts;
+  bool   rootHubChanged;
 
   (void) safeAction;
 
@@ -1786,14 +1804,23 @@ void WiiEHCI::PollInterrupts(IOUSBCompletionAction safeAction) {
 
   updatePortChangeBits();
   usbSts = readOpReg32(kEHCIRegUSBSts);
-  if ((usbSts & (kEHCIRegUSBStsUSBInterrupt | kEHCIRegUSBStsUSBErrorInterrupt)) != 0) {
+  rootHubChanged = hasPendingPortChange(usbSts);
+
+  if ((usbSts & (kEHCIRegUSBStsUSBInterrupt | kEHCIRegUSBStsUSBErrorInterrupt
+      | kEHCIRegUSBStsPortChangeDetect | kEHCIRegUSBStsHostSystemError
+      | kEHCIRegUSBStsFrameListRollover | kEHCIRegUSBStsInterruptOnAsyncAdvance)) != 0) {
     acknowledgeInterruptStatus(usbSts);
+  }
+
+  if ((usbSts & (kEHCIRegUSBStsUSBInterrupt | kEHCIRegUSBStsUSBErrorInterrupt)) != 0) {
     completeAsyncTransactions();
   }
-  if ((usbSts & (kEHCIRegUSBStsPortChangeDetect | kEHCIRegUSBStsHostSystemError)) != 0) {
-    acknowledgeInterruptStatus(usbSts);
+  if (usbSts & kEHCIRegUSBStsHostSystemError) {
+    WIISYSLOG("EHCI host system error while polling, status 0x%08X", usbSts);
+  }
+  if ((usbSts & kEHCIRegUSBStsHostSystemError) != 0) {
     UIMRootHubStatusChange();
-  } else if (_portResetChangeBitmap != 0) {
+  } else if (rootHubChanged) {
     UIMRootHubStatusChange();
   }
 }
@@ -1880,6 +1907,7 @@ IOReturn WiiEHCI::GetRootHubStringDescriptor(UInt8 index, OSData *desc) {
 
 void WiiEHCI::handleInterrupt(IOInterruptEventSource *intEventSource, int count) {
   UInt32 usbSts;
+  bool   rootHubChanged;
 
   (void) intEventSource;
   (void) count;
@@ -1890,6 +1918,7 @@ void WiiEHCI::handleInterrupt(IOInterruptEventSource *intEventSource, int count)
 
   updatePortChangeBits();
   usbSts = readOpReg32(kEHCIRegUSBSts);
+  rootHubChanged = hasPendingPortChange(usbSts);
   acknowledgeInterruptStatus(usbSts);
   if ((usbSts & (kEHCIRegUSBStsUSBInterrupt | kEHCIRegUSBStsUSBErrorInterrupt)) != 0) {
     completeAsyncTransactions();
@@ -1897,7 +1926,7 @@ void WiiEHCI::handleInterrupt(IOInterruptEventSource *intEventSource, int count)
   if (usbSts & kEHCIRegUSBStsHostSystemError) {
     WIISYSLOG("EHCI host system error interrupt, status 0x%08X", usbSts);
   }
-  if ((usbSts & kEHCIRegUSBStsPortChangeDetect) || (_portResetChangeBitmap != 0)) {
+  if (rootHubChanged || (usbSts & kEHCIRegUSBStsHostSystemError) != 0) {
     UIMRootHubStatusChange();
   }
 }

@@ -108,6 +108,7 @@ bool WiiOHCI::filterInterrupt(IOFilterInterruptEventSource *filterIntEventSource
   UInt32            intEnable;
   UInt32            intStatus;
 
+  IOInterruptState  intState;
   IOPhysicalAddress newWriteDoneHeadPhysAddr;
   bool              signalSecondaryInt;
 
@@ -172,7 +173,9 @@ bool WiiOHCI::filterInterrupt(IOFilterInterruptEventSource *filterIntEventSource
     writeReg32(kOHCIRegIntStatus, kOHCIRegIntStatusResumeDetected);
     OSSynchronizeIO();
 
+    intState = IOSimpleLockLockDisableInterrupt(_intRootHubStatusLock);
     _intResumeDetected = true;
+    IOSimpleLockUnlockEnableInterrupt(_intRootHubStatusLock, intState);
     signalSecondaryInt = true;
   }
 
@@ -183,7 +186,9 @@ bool WiiOHCI::filterInterrupt(IOFilterInterruptEventSource *filterIntEventSource
     writeReg32(kOHCIRegIntStatus, kOHCIRegIntStatusUnrecoverableError);
     OSSynchronizeIO();
 
+    intState = IOSimpleLockLockDisableInterrupt(_intRootHubStatusLock);
     _intUnrecoverableError = true;
+    IOSimpleLockUnlockEnableInterrupt(_intRootHubStatusLock, intState);
     signalSecondaryInt     = true;
   }
 
@@ -207,9 +212,9 @@ bool WiiOHCI::filterInterrupt(IOFilterInterruptEventSource *filterIntEventSource
     writeReg32(kOHCIRegIntStatus, kOHCIRegIntStatusRootHubStatusChange);
     OSSynchronizeIO();
 
-    IOSimpleLockLock(_intRootHubStatusLock);
+    intState = IOSimpleLockLockDisableInterrupt(_intRootHubStatusLock);
     _intRootHubStatus = true;
-    IOSimpleLockUnlock(_intRootHubStatusLock);
+    IOSimpleLockUnlockEnableInterrupt(_intRootHubStatusLock, intState);
 
     signalSecondaryInt = true;
   }
@@ -241,15 +246,19 @@ bool WiiOHCI::filterInterrupt(IOFilterInterruptEventSource *filterIntEventSource
 void WiiOHCI::handleInterrupt(IOInterruptEventSource *intEventSource, int count) {
   IOInterruptState  intState;
   volatile OHCITransferData  *newDoneTransfer;
+  bool resumeDetected;
   bool rootHubStatusChanged;
+  bool unrecoverableError;
   bool writeDoneHeadPending;
 
   (void) intEventSource;
   (void) count;
 
   newDoneTransfer = NULL;
+  resumeDetected = false;
   writeDoneHeadPending = false;
   rootHubStatusChanged = false;
+  unrecoverableError = false;
 
   intState = IOSimpleLockLockDisableInterrupt(_writeDoneHeadLock);
   if (_intWriteDoneHead || (_writeDoneHeadPtr != NULL)) {
@@ -261,11 +270,22 @@ void WiiOHCI::handleInterrupt(IOInterruptEventSource *intEventSource, int count)
   IOSimpleLockUnlockEnableInterrupt(_writeDoneHeadLock, intState);
 
   intState = IOSimpleLockLockDisableInterrupt(_intRootHubStatusLock);
+  resumeDetected = _intResumeDetected;
+  _intResumeDetected = false;
+  unrecoverableError = _intUnrecoverableError;
+  _intUnrecoverableError = false;
   rootHubStatusChanged = _intRootHubStatus;
   _intRootHubStatus = false;
   IOSimpleLockUnlockEnableInterrupt(_intRootHubStatusLock, intState);
 
-  WIIDBGLOG("Interrupt: WH: %u, RH: %u", writeDoneHeadPending ? 1 : 0, rootHubStatusChanged ? 1 : 0);
+  WIIDBGLOG("Interrupt: WH: %u, RD: %u, UE: %u, RH: %u", writeDoneHeadPending ? 1 : 0,
+    resumeDetected ? 1 : 0, unrecoverableError ? 1 : 0, rootHubStatusChanged ? 1 : 0);
+
+  if (unrecoverableError) {
+    WIISYSLOG("OHCI unrecoverable error interrupt, disabling master interrupt");
+    writeReg32(kOHCIRegIntDisable, kOHCIRegIntDisableMasterInterruptEnable);
+    OSSynchronizeIO();
+  }
 
   //
   // Done queue head written.
@@ -275,9 +295,9 @@ void WiiOHCI::handleInterrupt(IOInterruptEventSource *intEventSource, int count)
   }
 
   //
-  // Root hub status change.
+  // Resume-detect should also drive the root hub polling path, even if RHSC was not asserted.
   //
-  if (rootHubStatusChanged) {
+  if (resumeDetected || rootHubStatusChanged) {
     UIMRootHubStatusChange();
   }
 }

@@ -73,18 +73,10 @@ IOReturn WiiOHCI::doGeneralTransfer(OHCIEndpointData *endpoint, IOUSBCompletion 
   //
   headTDPhysAddr = USBToHostLong(endpoint->ed->headTDPhysAddr);
   if (headTDPhysAddr & kOHCIEDTDHeadHalted) {
-    //
-    // A failed setup/data phase on the default control pipe must not leave
-    // endpoint 0 permanently poisoned. If the queue is empty and the halted
-    // ED belongs to endpoint 0, clear the residual halt/carry state and let
-    // the next control request recover the device.
-    //
-    if (isDefaultControlEndpoint
-        && ((headTDPhysAddr & kOHCIEDTDHeadMask) == endpoint->transferTail->physAddr)) {
-      WIISYSLOG("Recovering halted control pipe (EP Flags: 0x%X, head: 0x%X, tail: 0x%X)",
+    if ((headTDPhysAddr & kOHCIEDTDHeadMask) == endpoint->transferTail->physAddr) {
+      WIISYSLOG("Recovering halted idle pipe (EP Flags: 0x%X, head: 0x%X, tail: 0x%X)",
         endpointFlags, headTDPhysAddr, endpoint->transferTail->physAddr);
-      endpoint->ed->headTDPhysAddr = HostToUSBLong(endpoint->transferTail->physAddr);
-      OSSynchronizeIO();
+      updateEndpointHead(endpoint, endpoint->transferTail->physAddr, true);
     } else {
       WIISYSLOG("Pipe is stalled (EP Flags: 0x%X)", endpointFlags);
       return kIOUSBPipeStalled;
@@ -496,19 +488,10 @@ IOReturn WiiOHCI::doIsochTransfer(short functionAddress, short endpointNumber, I
 bool WiiOHCI::completeGeneralTransfer(OHCITransferData *transfer) {
   UInt32    transferStatus;
   UInt32    bufferSizeRemaining;
-  UInt32    endpointFlags;
-  UInt32    endpointNumber;
-  UInt32    headTDPhysAddr;
-  bool      isDefaultControlEndpoint;
   IOReturn  tdStatus;
 
   transferStatus = (USBToHostLong(transfer->genTD->flags) & kOHCIGenTDFlagsConditionCodeMask) >> kOHCIGenTDFlagsConditionCodeShift;
   tdStatus = convertTDStatus(transferStatus);
-  endpointFlags = USBToHostLong(transfer->endpoint->ed->flags);
-  endpointNumber = (endpointFlags & kOHCIEDFlagsEndpointMask) >> kOHCIEDFlagsEndpointShift;
-  isDefaultControlEndpoint = !transfer->endpoint->isochronous
-    && (endpointNumber == 0)
-    && ((endpointFlags & kOHCIEDFlagsDirectionMask) == kOHCIEDFlagsDirectionTD);
   WIIDBGLOG("GenTD phys 0x%X, next 0x%X, stat: 0x%X, 0x%X", transfer->physAddr, USBToHostLong(transfer->genTD->nextTDPhysAddr), transferStatus, tdStatus);
 
   bufferSizeRemaining = getGenTransferBufferRemaining(transfer);
@@ -536,30 +519,8 @@ bool WiiOHCI::completeGeneralTransfer(OHCITransferData *transfer) {
   if (tdStatus != kIOReturnSuccess) {
     WIISYSLOG("Got an error here: 0x%X", tdStatus);
 
-    if (transfer->last) {
-      headTDPhysAddr = USBToHostLong(transfer->endpoint->ed->headTDPhysAddr) & kOHCIEDTDHeadMask;
-
-      if (headTDPhysAddr != transfer->endpoint->transferTail->physAddr) {
-        WIIDBGLOG("Aborting queued transfers behind failed request");
-        removeEndpointTransfers(transfer->endpoint);
-        if ((tdStatus == kIOUSBPipeStalled) && !isDefaultControlEndpoint) {
-          transfer->endpoint->ed->headTDPhysAddr |= HostToUSBLong(kOHCIEDTDHeadHalted);
-        }
-      } else if ((tdStatus != kIOUSBPipeStalled) || isDefaultControlEndpoint) {
-        transfer->endpoint->ed->headTDPhysAddr = HostToUSBLong(transfer->endpoint->transferTail->physAddr);
-      }
-
-      if (tdStatus == kIOReturnUnderrun) {
-        tdStatus = kIOReturnSuccess;
-      }
-
-      WIIDBGLOG("Calling completion");
-      Complete(transfer->genCompletion, tdStatus, bufferSizeRemaining);
-      return false;
-    }
-
     WIIDBGLOG("Completing failed endpoint queue");
-    completeFailedEndpointGenTransfers(transfer->endpoint, tdStatus, bufferSizeRemaining);
+    completeFailedEndpointGenTransfers(transfer, tdStatus);
     return true;
   }
 
@@ -954,6 +915,10 @@ IOReturn WiiOHCI::UIMCreateBulkTransfer(short functionNumber, short endpointNumb
 IOReturn WiiOHCI::UIMCreateInterruptEndpoint(short functionAddress, short endpointNumber, UInt8 direction,
                                              short speed, UInt16 maxPacketSize, short pollingRate) {
   OHCIEndpointData  *endpointIntHead;
+  UInt8             interval;
+  UInt8             branch;
+  UInt16            load;
+  IOReturn          status;
 
   WIIDBGLOG("F: %d, EP: %u, dir: %d, spd: %s, sz: %u, pr: %d", functionAddress, endpointNumber, direction,
     (speed == kUSBDeviceSpeedFull) ? "full" : "low", maxPacketSize, pollingRate);
@@ -966,9 +931,22 @@ IOReturn WiiOHCI::UIMCreateInterruptEndpoint(short functionAddress, short endpoi
   }
 
   //
-  // Get the correct head for the desired polling rate.
+  // Balance this endpoint onto the least loaded periodic branch that still
+  // keeps each affected frame within the 90% OHCI periodic budget.
   //
-  endpointIntHead = getInterruptEndpointHead(pollingRate);
+  interval = normalizeInterruptPollingRate(pollingRate);
+  if (interval == 0) {
+    return kIOReturnNoBandwidth;
+  }
+
+  load = calculatePeriodicLoad(speed, direction, false, maxPacketSize);
+  branch = findInterruptBranch(interval, load);
+  if (branch >= interval) {
+    WIISYSLOG("No interrupt bandwidth for EP %u interval %u load %u", endpointNumber, interval, load);
+    return kIOReturnNoBandwidth;
+  }
+
+  endpointIntHead = getInterruptEndpointHead(interval, branch);
   if (endpointIntHead == NULL) {
     return kIOReturnNoBandwidth;
   }
@@ -976,7 +954,18 @@ IOReturn WiiOHCI::UIMCreateInterruptEndpoint(short functionAddress, short endpoi
   //
   // Create an endpoint linked to the desired polling rate head.
   //
-  return addNewEndpoint(functionAddress, endpointNumber, maxPacketSize, speed, direction, endpointIntHead);
+  status = addNewEndpoint(functionAddress, endpointNumber, maxPacketSize, speed, direction, endpointIntHead);
+  if (status != kIOReturnSuccess) {
+    return status;
+  }
+
+  endpointIntHead->nextEndpoint->periodicInterval = interval;
+  endpointIntHead->nextEndpoint->periodicBranch = branch;
+  endpointIntHead->nextEndpoint->periodicLoad = load;
+  adjustInterruptBranchLoad(interval, branch, load);
+  WIIDBGLOG("Scheduled interrupt EP %u on %ums branch %u load %u", endpointNumber, interval, branch, load);
+
+  return kIOReturnSuccess;
 }
 
 //
@@ -1264,6 +1253,10 @@ IOReturn WiiOHCI::UIMDeleteEndpoint(short functionNumber, short endpointNumber, 
       _isoInTimerEventSource->disable();
       _isoOutTimerEventSource->disable();
     }
+  } else if (endpointType == kWiiOHCIEndpointTypeInterrupt) {
+    adjustInterruptBranchLoad(endpoint->periodicInterval, endpoint->periodicBranch, -((SInt32)endpoint->periodicLoad));
+    WIIDBGLOG("Returned interrupt bandwidth: %u us, interval: %u, branch: %u", endpoint->periodicLoad,
+      endpoint->periodicInterval, endpoint->periodicBranch);
   }
 
   //
@@ -1303,7 +1296,11 @@ IOReturn WiiOHCI::UIMClearEndpointStall(short functionNumber, short endpointNumb
   // Reset the transfer queue by unlinking all transfers.
   // This will also clear the current stall bit on the endpoint.
   //
+  endpoint->ed->flags |= HostToUSBLong(kOHCIEDFlagsSkip);
+  IOSleep(2);
   removeEndpointTransfers(endpoint);
+  updateEndpointHead(endpoint, endpoint->transferTail->physAddr, false);
+  endpoint->ed->flags &= ~(HostToUSBLong(kOHCIEDFlagsSkip));
 
   return kIOReturnSuccess;
 }

@@ -174,6 +174,7 @@ private:
 
   // Interrupt endpoints.
   OHCIIntEndpoint       _interruptEndpoints[kWiiOHCIInterruptNodeCount];
+  UInt16                _interruptBranchLoad[kOHCINumInterruptHeads];
 
   //
   // Transfers.
@@ -245,12 +246,19 @@ private:
   IOReturn convertTDStatus(UInt8 ohciStatus);
   OHCITransferData *getTransferFromPhys(IOPhysicalAddress physAddr);
   UInt32 getGenTransferBufferRemaining(OHCITransferData *genTransfer);
+  void quiesceEndpoint(OHCIEndpointData *endpoint);
+  void updateEndpointHead(OHCIEndpointData *endpoint, UInt32 nextTDPhysAddr, bool preserveCarry);
   IOReturn allocateFreeEndpoints(void);
   IOReturn allocateFreeTransfers(bool isochronous);
   OHCIEndpointData *getFreeEndpoint(bool isochronous = false);
   OHCITransferData *getFreeTransfer(OHCIEndpointData *endpoint);
   void returnEndpoint(OHCIEndpointData *endpoint);
   void returnTransfer(OHCITransferData *transfer);
+  UInt8 normalizeInterruptPollingRate(UInt16 pollingRate);
+  UInt16 calculatePeriodicLoad(UInt8 speed, UInt8 direction, bool isochronous, UInt16 maxPacketSize);
+  UInt8 findInterruptBranch(UInt8 interval, UInt16 load);
+  UInt8 getInterruptNodeIndex(UInt8 interval, UInt8 branch);
+  void adjustInterruptBranchLoad(UInt8 interval, UInt8 branch, SInt32 delta);
 
   IOReturn initControlEndpoints(void);
   void primeControlListForLatte(void);
@@ -259,14 +267,14 @@ private:
   IOReturn initInterruptEndpoints(void);
   OHCIEndpointData *getEndpoint(UInt8 functionNumber, UInt8 endpointNumber, UInt8 direction,
                                 UInt8 *type, OHCIEndpointData **outPrevEndpoint = NULL);
-  OHCIEndpointData *getInterruptEndpointHead(UInt8 pollingRate);
+  OHCIEndpointData *getInterruptEndpointHead(UInt8 interval, UInt8 branch);
   IOReturn addNewEndpoint(UInt8 functionNumber, UInt8 endpointNumber, UInt16 maxPacketSize,
                           UInt8 speed, UInt8 direction, OHCIEndpointData *endpointHeadPtr,
                           bool isochronous = false);
   IOReturn removeEndpoint(UInt8 functionNumber, UInt8 endpointNumber,
                           OHCIEndpointData *endpointHeadPtr, OHCIEndpointData *endpointTailPtr);
   void removeEndpointTransfers(OHCIEndpointData *endpoint);
-  void completeFailedEndpointGenTransfers(OHCIEndpointData *endpoint, IOReturn tdStatus, UInt32 bufferSizeRemaining);
+  void completeFailedEndpointGenTransfers(OHCITransferData *failedTransfer, IOReturn tdStatus);
 
   //
   // Transfers.

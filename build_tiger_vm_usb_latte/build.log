@@ -1,40 +1,3 @@
-tar: include/WiiEspresso.hpp: time stamp 2026-04-20 17:32:14 is 1656 s in the future
-tar: include/WiiCommon.hpp: time stamp 2026-04-20 17:32:14 is 1656 s in the future
-tar: include: time stamp 2026-04-20 17:09:53 is 314 s in the future
-tar: WiiGraphics/.DS_Store: time stamp 2026-04-20 20:55:42 is 13863 s in the future
-tar: WiiGraphics/src/.DS_Store: time stamp 2026-04-20 20:55:42 is 13863 s in the future
-tar: WiiGraphics/src/Cafe/WiiGX2UserClient.hpp: time stamp 2026-04-20 20:21:40 is 11821 s in the future
-tar: WiiGraphics/src/Cafe/WiiGX2.cpp: time stamp 2026-04-20 19:15:43 is 7864 s in the future
-tar: WiiGraphics/src/Cafe/WiiCafeFB.cpp: time stamp 2026-04-20 20:21:40 is 11821 s in the future
-tar: WiiGraphics/src/Cafe/WiiGX2.hpp: time stamp 2026-04-20 17:32:14 is 1655 s in the future
-tar: WiiPlatform/.DS_Store: time stamp 2026-04-20 19:42:27 is 9468 s in the future
-tar: WiiPlatform/Makefile: time stamp 2026-04-20 17:32:14 is 1655 s in the future
-tar: WiiPlatform/Info.tiger.plist: time stamp 2026-04-20 17:32:14 is 1655 s in the future
-tar: WiiPlatform/src/.DS_Store: time stamp 2026-04-20 19:42:27 is 9468 s in the future
-tar: WiiPlatform/src/Interrupts/WiiInterruptController.cpp: time stamp 2026-04-20 17:32:14 is 1655 s in the future
-tar: WiiPlatform/src/Interrupts/WiiInterruptController.hpp: time stamp 2026-04-20 17:32:14 is 1655 s in the future
-tar: WiiPlatform/src/Interrupts/HollywoodInterruptController.hpp: time stamp 2026-04-20 17:32:14 is 1655 s in the future
-tar: WiiPlatform/src/Interrupts/LatteInterruptController.hpp: time stamp 2026-04-20 17:32:14 is 1655 s in the future
-tar: WiiPlatform/src/PE/WiiCPU.cpp: time stamp 2026-04-20 21:44:39 is 16800 s in the future
-tar: WiiPlatform: time stamp 2026-04-20 17:22:03 is 1044 s in the future
-tar: WiiStorage/.DS_Store: time stamp 2026-04-20 20:55:42 is 13863 s in the future
-tar: WiiStorage/src/.DS_Store: time stamp 2026-04-20 20:55:42 is 13863 s in the future
-tar: WiiStorage/src/SDHC/WiiSDHC.hpp: time stamp 2026-04-20 20:13:28 is 11329 s in the future
-tar: WiiStorage/src/SDHC/WiiSDHC_Card.cpp: time stamp 2026-04-20 20:13:28 is 11329 s in the future
-tar: WiiStorage/src/SDHC/WiiSDHC.cpp: time stamp 2026-04-20 20:13:28 is 11329 s in the future
-tar: WiiStorage/src/SDHC/WiiSDHC_Commands.cpp: time stamp 2026-04-20 20:13:28 is 11329 s in the future
-tar: WiiStorage/src/SDHC/WiiSDHC_Private.cpp: time stamp 2026-04-20 20:13:28 is 11329 s in the future
-tar: WiiStorage/src/BlockStorage/WiiSDBlockStorageDevice.cpp: time stamp 2026-04-20 20:13:28 is 11329 s in the future
-tar: WiiUSB/.DS_Store: time stamp 2026-04-20 20:55:42 is 13863 s in the future
-tar: WiiUSB/src/.DS_Store: time stamp 2026-04-20 20:55:42 is 13863 s in the future
-tar: WiiUSB/src/OHCI/WiiOHCI.hpp: time stamp 2026-04-20 21:58:15 is 17616 s in the future
-tar: WiiUSB/src/OHCI/WiiOHCI_Interrupts.cpp: time stamp 2026-04-20 21:44:23 is 16784 s in the future
-tar: WiiUSB/src/OHCI/WiiOHCI_UIM.cpp: time stamp 2026-04-20 21:58:39 is 17640 s in the future
-tar: WiiUSB/src/OHCI/WiiOHCI_RootHub.cpp: time stamp 2026-04-20 21:16:17 is 15098 s in the future
-tar: WiiUSB/src/OHCI/WiiOHCI_Descriptors.cpp: time stamp 2026-04-20 21:58:23 is 17624 s in the future
-tar: WiiUSB/src/OHCI/WiiOHCI.cpp: time stamp 2026-04-20 21:08:00 is 14601 s in the future
-tar: WiiUSB/src/EHCI/WiiEHCI.cpp: time stamp 2026-04-20 21:44:27 is 16788 s in the future
-tar: Makefile: time stamp 2026-04-20 17:32:14 is 1655 s in the future
 make -C WiiAudio all && make -C WiiEXI all && make -C WiiGraphics all && make -C WiiPlatform all && make -C WiiStorage all && make -C WiiUSB all && true
 /usr/bin/gcc -fno-builtin -fno-common -mlong-branch -finline -fno-keep-inline-functions -fmessage-length=0  -force_cpusubtype_ALL -static -nostdlib -r -D__KERNEL__ -DKERNEL -DDEBUG -Wall -mmacosx-version-min=10.4 -I/System/Library/Frameworks/Kernel.framework/Headers -I/Developer/SDKs/MacOSX10.4u.sdk/usr/include -I../include -Isrc -DKPI_10_4_0_PPC_COMPAT=1 -DWII_TIGER_SDK=1 -DWII_TIGER_IOINTERRUPT_API=1 -c build/WiiAudio-info.c -o build/build/WiiAudio-info.o
 /usr/bin/g++ -fno-builtin -fno-common -mlong-branch -finline -fno-keep-inline-functions -fmessage-length=0  -force_cpusubtype_ALL -static -nostdlib -r -D__KERNEL__ -DKERNEL -DDEBUG -Wall -mmacosx-version-min=10.4 -I/System/Library/Frameworks/Kernel.framework/Headers -I/Developer/SDKs/MacOSX10.4u.sdk/usr/include -I../include -Isrc -DKPI_10_4_0_PPC_COMPAT=1 -DWII_TIGER_SDK=1 -DWII_TIGER_IOINTERRUPT_API=1 -x c++ -fapple-kext -fno-rtti -fno-exceptions -fcheck-new -c src/WiiAudioDevice.cpp -o build/src/WiiAudioDevice.o
@@ -89,8 +52,8 @@ src/SDHC/WiiSDHC_Private.cpp:181: warning: passing negative value '-0x0000000000
 /usr/bin/gcc -fno-builtin -fno-common -mlong-branch -finline -fno-keep-inline-functions -fmessage-length=0  -force_cpusubtype_ALL -static -nostdlib -r -D__KERNEL__ -DKERNEL -DDEBUG -Wall -mmacosx-version-min=10.4 -I/System/Library/Frameworks/Kernel.framework/Headers -I/Developer/SDKs/MacOSX10.4u.sdk/usr/include -I../include -Isrc/OHCI -Isrc/EHCI -DKPI_10_4_0_PPC_COMPAT=1 -DWII_TIGER_SDK=1 -DWII_TIGER_IOINTERRUPT_API=1 -c build/WiiUSB-info.c -o build/build/WiiUSB-info.o
 /usr/bin/g++ -fno-builtin -fno-common -mlong-branch -finline -fno-keep-inline-functions -fmessage-length=0  -force_cpusubtype_ALL -static -nostdlib -r -D__KERNEL__ -DKERNEL -DDEBUG -Wall -mmacosx-version-min=10.4 -I/System/Library/Frameworks/Kernel.framework/Headers -I/Developer/SDKs/MacOSX10.4u.sdk/usr/include -I../include -Isrc/OHCI -Isrc/EHCI -DKPI_10_4_0_PPC_COMPAT=1 -DWII_TIGER_SDK=1 -DWII_TIGER_IOINTERRUPT_API=1 -x c++ -fapple-kext -fno-rtti -fno-exceptions -fcheck-new -c src/OHCI/WiiOHCI.cpp -o build/src/OHCI/WiiOHCI.o
 src/OHCI/WiiOHCI.cpp: In member function 'virtual IOReturn WiiOHCI::UIMInitialize(IOService*)':
-src/OHCI/WiiOHCI.cpp:408: warning: passing negative value '-0x00000000000000001' for argument 2 to 'void WiiOHCI::writeReg32(UInt32, UInt32)'
-src/OHCI/WiiOHCI.cpp:409: warning: passing negative value '-0x00000000000000001' for argument 2 to 'void WiiOHCI::writeReg32(UInt32, UInt32)'
+src/OHCI/WiiOHCI.cpp:413: warning: passing negative value '-0x00000000000000001' for argument 2 to 'void WiiOHCI::writeReg32(UInt32, UInt32)'
+src/OHCI/WiiOHCI.cpp:414: warning: passing negative value '-0x00000000000000001' for argument 2 to 'void WiiOHCI::writeReg32(UInt32, UInt32)'
 /usr/bin/g++ -fno-builtin -fno-common -mlong-branch -finline -fno-keep-inline-functions -fmessage-length=0  -force_cpusubtype_ALL -static -nostdlib -r -D__KERNEL__ -DKERNEL -DDEBUG -Wall -mmacosx-version-min=10.4 -I/System/Library/Frameworks/Kernel.framework/Headers -I/Developer/SDKs/MacOSX10.4u.sdk/usr/include -I../include -Isrc/OHCI -Isrc/EHCI -DKPI_10_4_0_PPC_COMPAT=1 -DWII_TIGER_SDK=1 -DWII_TIGER_IOINTERRUPT_API=1 -x c++ -fapple-kext -fno-rtti -fno-exceptions -fcheck-new -c src/OHCI/WiiOHCI_Buffers.cpp -o build/src/OHCI/WiiOHCI_Buffers.o
 /usr/bin/g++ -fno-builtin -fno-common -mlong-branch -finline -fno-keep-inline-functions -fmessage-length=0  -force_cpusubtype_ALL -static -nostdlib -r -D__KERNEL__ -DKERNEL -DDEBUG -Wall -mmacosx-version-min=10.4 -I/System/Library/Frameworks/Kernel.framework/Headers -I/Developer/SDKs/MacOSX10.4u.sdk/usr/include -I../include -Isrc/OHCI -Isrc/EHCI -DKPI_10_4_0_PPC_COMPAT=1 -DWII_TIGER_SDK=1 -DWII_TIGER_IOINTERRUPT_API=1 -x c++ -fapple-kext -fno-rtti -fno-exceptions -fcheck-new -c src/OHCI/WiiOHCI_Descriptors.cpp -o build/src/OHCI/WiiOHCI_Descriptors.o
 /usr/bin/g++ -fno-builtin -fno-common -mlong-branch -finline -fno-keep-inline-functions -fmessage-length=0  -force_cpusubtype_ALL -static -nostdlib -r -D__KERNEL__ -DKERNEL -DDEBUG -Wall -mmacosx-version-min=10.4 -I/System/Library/Frameworks/Kernel.framework/Headers -I/Developer/SDKs/MacOSX10.4u.sdk/usr/include -I../include -Isrc/OHCI -Isrc/EHCI -DKPI_10_4_0_PPC_COMPAT=1 -DWII_TIGER_SDK=1 -DWII_TIGER_IOINTERRUPT_API=1 -x c++ -fapple-kext -fno-rtti -fno-exceptions -fcheck-new -c src/OHCI/WiiOHCI_Interrupts.cpp -o build/src/OHCI/WiiOHCI_Interrupts.o
@@ -106,11 +69,11 @@ rm -rf build_pkg
 mkdir -p build_pkg/Kexts/WiiAudio.kext && mkdir -p build_pkg/Kexts/WiiEXI.kext && mkdir -p build_pkg/Kexts/WiiGraphics.kext && mkdir -p build_pkg/Kexts/WiiPlatform.kext && mkdir -p build_pkg/Kexts/WiiStorage.kext && mkdir -p build_pkg/Kexts/WiiUSB.kext && true
 cp -r WiiAudio/build_kext/WiiAudio.kext build_pkg/Kexts && cp -r WiiEXI/build_kext/WiiEXI.kext build_pkg/Kexts && cp -r WiiGraphics/build_kext/WiiGraphics.kext build_pkg/Kexts && cp -r WiiPlatform/build_kext/WiiPlatform.kext build_pkg/Kexts && cp -r WiiStorage/build_kext/WiiStorage.kext build_pkg/Kexts && cp -r WiiUSB/build_kext/WiiUSB.kext build_pkg/Kexts && true
 kextcache -z -m Wii.mkext build_pkg/Kexts
-warning: kernel extension /Users/admin/osxdrivers-build/build_pkg/Kexts/WiiAudio.kext is missing dependencies (including in cache anyway; dependencies may be available from elsewhere)
-warning: kernel extension /Users/admin/osxdrivers-build/build_pkg/Kexts/WiiEXI.kext is missing dependencies (including in cache anyway; dependencies may be available from elsewhere)
-warning: kernel extension /Users/admin/osxdrivers-build/build_pkg/Kexts/WiiGraphics.kext is missing dependencies (including in cache anyway; dependencies may be available from elsewhere)
-warning: kernel extension /Users/admin/osxdrivers-build/build_pkg/Kexts/WiiPlatform.kext is missing dependencies (including in cache anyway; dependencies may be available from elsewhere)
-warning: kernel extension /Users/admin/osxdrivers-build/build_pkg/Kexts/WiiStorage.kext is missing dependencies (including in cache anyway; dependencies may be available from elsewhere)
-warning: kernel extension /Users/admin/osxdrivers-build/build_pkg/Kexts/WiiUSB.kext is missing dependencies (including in cache anyway; dependencies may be available from elsewhere)
+warning: kernel extension /private/tmp/osx-drivers/build_pkg/Kexts/WiiAudio.kext is missing dependencies (including in cache anyway; dependencies may be available from elsewhere)
+warning: kernel extension /private/tmp/osx-drivers/build_pkg/Kexts/WiiEXI.kext is missing dependencies (including in cache anyway; dependencies may be available from elsewhere)
+warning: kernel extension /private/tmp/osx-drivers/build_pkg/Kexts/WiiGraphics.kext is missing dependencies (including in cache anyway; dependencies may be available from elsewhere)
+warning: kernel extension /private/tmp/osx-drivers/build_pkg/Kexts/WiiPlatform.kext is missing dependencies (including in cache anyway; dependencies may be available from elsewhere)
+warning: kernel extension /private/tmp/osx-drivers/build_pkg/Kexts/WiiStorage.kext is missing dependencies (including in cache anyway; dependencies may be available from elsewhere)
+warning: kernel extension /private/tmp/osx-drivers/build_pkg/Kexts/WiiUSB.kext is missing dependencies (including in cache anyway; dependencies may be available from elsewhere)
 cp Wii.mkext build_pkg
 cd build_pkg; zip -qry ../Wiintosh-osx-drivers-0.5.1.zip *

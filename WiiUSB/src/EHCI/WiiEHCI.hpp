@@ -169,6 +169,7 @@ private:
   void powerOnPorts(void);
   void handPortToCompanion(UInt16 port, UInt32 portStatus);
   void updatePortChangeBits(void);
+  bool hasPendingPortChange(UInt32 usbSts);
   IOReturn resetRootHubPort(UInt16 port);
   void handleInterrupt(IOInterruptEventSource *intEventSource, int count);
   void acknowledgeInterruptStatus(UInt32 usbSts);

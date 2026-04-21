@@ -7,6 +7,14 @@
 
 #include "WiiOHCI.hpp"
 
+#define kWiiOHCIFrameTimeMaxUsecsAlloc     900U
+#define kWiiOHCIBandwidthHostDelayNS       1000U
+#define kWiiOHCIBandwidthHubLSSetupNS      333U
+
+static inline UInt32 WiiOHCIBitTime(UInt16 byteCount) {
+  return (7U * 8U * byteCount) / 6U;
+}
+
 //
 // Converts the status of a transfer descriptor to I/O Kit status.
 //
@@ -72,6 +80,48 @@ UInt32 WiiOHCI::getGenTransferBufferRemaining(OHCITransferData *genTransfer) {
   } else {
     return USBToHostLong(genTransfer->genTD->bufferEndPhysAddr) - USBToHostLong(genTransfer->genTD->currentBufferPtrPhysAddr) + 1;
   }
+}
+
+void WiiOHCI::quiesceEndpoint(OHCIEndpointData *endpoint) {
+  UInt32 retries;
+
+  if (endpoint->isochronous) {
+    return;
+  }
+
+  endpoint->ed->flags |= HostToUSBLong(kOHCIEDFlagsSkip);
+  OSSynchronizeIO();
+
+  writeReg32(kOHCIRegIntStatus, kOHCIRegIntStatusStartOfFrame);
+  OSSynchronizeIO();
+
+  for (retries = 200; retries != 0; retries--) {
+    if ((readReg32(kOHCIRegIntStatus) & kOHCIRegIntStatusStartOfFrame) != 0) {
+      break;
+    }
+    IODelay(10);
+  }
+
+  writeReg32(kOHCIRegIntStatus, kOHCIRegIntStatusStartOfFrame);
+  OSSynchronizeIO();
+
+  if (retries == 0) {
+    WIISYSLOG("Timed out waiting for ED quiesce on endpoint phys 0x%X", endpoint->physAddr);
+  }
+}
+
+void WiiOHCI::updateEndpointHead(OHCIEndpointData *endpoint, UInt32 nextTDPhysAddr, bool preserveCarry) {
+  UInt32 headTDPhysAddr;
+  UInt32 headFlags;
+
+  headTDPhysAddr = USBToHostLong(endpoint->ed->headTDPhysAddr);
+  headFlags = 0;
+  if (preserveCarry) {
+    headFlags = headTDPhysAddr & kOHCIEDTDHeadCarry;
+  }
+
+  endpoint->ed->headTDPhysAddr = HostToUSBLong((nextTDPhysAddr & kOHCIEDTDHeadMask) | headFlags);
+  OSSynchronizeIO();
 }
 
 //
@@ -152,6 +202,9 @@ OHCIEndpointData *WiiOHCI::getFreeEndpoint(bool isochronous) {
   _freeEndpointHeadPtr   = endpoint->nextEndpoint;
   endpoint->nextEndpoint = NULL;
   endpoint->isochronous  = isochronous;
+  endpoint->periodicInterval = 0;
+  endpoint->periodicBranch = 0;
+  endpoint->periodicLoad = 0;
 
   return endpoint;
 }
@@ -236,6 +289,124 @@ void WiiOHCI::returnTransfer(OHCITransferData *transfer) {
   } else {
     transfer->nextTransfer  = _freeGenTransferHeadPtr;
     _freeGenTransferHeadPtr = transfer;
+  }
+}
+
+UInt8 WiiOHCI::normalizeInterruptPollingRate(UInt16 pollingRate) {
+  if (pollingRate < 1) {
+    return 0;
+  } else if (pollingRate < 2) {
+    return 1;
+  } else if (pollingRate < 4) {
+    return 2;
+  } else if (pollingRate < 8) {
+    return 4;
+  } else if (pollingRate < 16) {
+    return 8;
+  } else if (pollingRate < 32) {
+    return 16;
+  }
+
+  return 32;
+}
+
+UInt16 WiiOHCI::calculatePeriodicLoad(UInt8 speed, UInt8 direction, bool isochronous, UInt16 maxPacketSize) {
+  UInt64 bitTime;
+  UInt64 loadNS;
+  UInt64 tmp;
+  bool isInput;
+
+  bitTime = WiiOHCIBitTime(maxPacketSize);
+  isInput = (direction == kUSBIn);
+
+  switch (speed) {
+    case kUSBDeviceSpeedLow:
+      if (isInput) {
+        tmp = (67667ULL * (31ULL + (10ULL * bitTime))) / 1000ULL;
+        loadNS = 64060ULL + (2ULL * kWiiOHCIBandwidthHubLSSetupNS) + kWiiOHCIBandwidthHostDelayNS + tmp;
+      } else {
+        tmp = (66700ULL * (31ULL + (10ULL * bitTime))) / 1000ULL;
+        loadNS = 64107ULL + (2ULL * kWiiOHCIBandwidthHubLSSetupNS) + kWiiOHCIBandwidthHostDelayNS + tmp;
+      }
+      break;
+
+    case kUSBDeviceSpeedFull:
+    default:
+      tmp = (8354ULL * (31ULL + (10ULL * bitTime))) / 1000ULL;
+      if (isochronous) {
+        loadNS = (isInput ? 7268ULL : 6265ULL) + kWiiOHCIBandwidthHostDelayNS + tmp;
+      } else {
+        loadNS = 9107ULL + kWiiOHCIBandwidthHostDelayNS + tmp;
+      }
+      break;
+  }
+
+  return (UInt16)((loadNS + 999ULL) / 1000ULL);
+}
+
+UInt8 WiiOHCI::findInterruptBranch(UInt8 interval, UInt16 load) {
+  UInt8 bestBranch;
+
+  bestBranch = 0xFF;
+  for (UInt8 branch = 0; branch < interval; branch++) {
+    bool fits;
+
+    fits = true;
+    for (UInt32 slot = branch; slot < kOHCINumInterruptHeads; slot += interval) {
+      if ((_interruptBranchLoad[slot] + load) > kWiiOHCIFrameTimeMaxUsecsAlloc) {
+        fits = false;
+        break;
+      }
+    }
+    if (!fits) {
+      continue;
+    }
+
+    if ((bestBranch == 0xFF) || (_interruptBranchLoad[branch] < _interruptBranchLoad[bestBranch])) {
+      bestBranch = branch;
+    }
+  }
+
+  return bestBranch;
+}
+
+UInt8 WiiOHCI::getInterruptNodeIndex(UInt8 interval, UInt8 branch) {
+  switch (interval) {
+    case 1:
+      return 62;
+
+    case 2:
+      return 60 + (branch & 0x1);
+
+    case 4:
+      return 56 + (branch & 0x3);
+
+    case 8:
+      return 48 + (branch & 0x7);
+
+    case 16:
+      return 32 + (branch & 0xF);
+
+    case 32:
+      return branch & 0x1F;
+  }
+
+  return kWiiOHCIInterruptNodeCount;
+}
+
+void WiiOHCI::adjustInterruptBranchLoad(UInt8 interval, UInt8 branch, SInt32 delta) {
+  if ((interval == 0) || (branch >= interval)) {
+    return;
+  }
+
+  for (UInt32 slot = branch; slot < kOHCINumInterruptHeads; slot += interval) {
+    SInt32 load;
+
+    load = (SInt32)_interruptBranchLoad[slot] + delta;
+    if (load < 0) {
+      load = 0;
+    }
+    _interruptBranchLoad[slot] = (UInt16)load;
   }
 }
 
@@ -390,6 +561,8 @@ IOReturn WiiOHCI::initIsoEndpoints(void) {
 // Initializes the interrupt endpoint tree and HCCA area.
 //
 IOReturn WiiOHCI::initInterruptEndpoints(void) {
+  bzero(_interruptBranchLoad, sizeof (_interruptBranchLoad));
+
   //
   // Allocate all static interrupt endpoints.
   // These will always be disabled and in place to support placing
@@ -585,31 +758,17 @@ OHCIEndpointData *WiiOHCI::getEndpoint(UInt8 functionNumber, UInt8 endpointNumbe
 }
 
 //
-// Gets an interrupt endpoint head for the specified polling rate.
+// Gets an interrupt endpoint head for the specified interval/branch.
 //
-OHCIEndpointData *WiiOHCI::getInterruptEndpointHead(UInt8 pollingRate) {
-  UInt16 frameNumber;
+OHCIEndpointData *WiiOHCI::getInterruptEndpointHead(UInt8 interval, UInt8 branch) {
+  UInt8 nodeIndex;
 
-  //
-  // Get frame number for randomness.
-  //
-  frameNumber = (UInt16)(readReg32(kOHCIRegFmNumber) & kOHCIRegFmNumberMask);
-
-  if (pollingRate < 1) {
+  nodeIndex = getInterruptNodeIndex(interval, branch);
+  if (nodeIndex >= ARRSIZE(_interruptEndpoints)) {
     return NULL;
-  } else if (pollingRate < 2) {
-    return _interruptEndpoints[62].headEndpoint; // 1ms.
-  } else if (pollingRate < 4) {
-    return _interruptEndpoints[60 + (frameNumber % 2)].headEndpoint; // 2ms.
-  } else if (pollingRate < 8) {
-    return _interruptEndpoints[56 + (frameNumber % 4)].headEndpoint; // 4ms.
-  } else if (pollingRate < 16) {
-    return _interruptEndpoints[48 + (frameNumber % 8)].headEndpoint; // 8ms.
-  } else if (pollingRate < 32) {
-    return _interruptEndpoints[32 + (frameNumber % 16)].headEndpoint; // 16ms.
-  } else {
-    return _interruptEndpoints[frameNumber % 32].headEndpoint; // 32ms.
   }
+
+  return _interruptEndpoints[nodeIndex].headEndpoint;
 }
 
 //
@@ -717,8 +876,7 @@ void WiiOHCI::removeEndpointTransfers(OHCIEndpointData *endpoint) {
   //
   WIIDBGLOG("TD head phys: 0x%X, tail phys: 0x%X", USBToHostLong(endpoint->ed->headTDPhysAddr), USBToHostLong(endpoint->ed->tailTDPhysAddr));
   transferCurr = getTransferFromPhys(USBToHostLong(endpoint->ed->headTDPhysAddr) & kOHCIEDTDHeadMask);
-
-  endpoint->ed->headTDPhysAddr = endpoint->ed->tailTDPhysAddr;
+  updateEndpointHead(endpoint, USBToHostLong(endpoint->ed->tailTDPhysAddr) & kOHCIEDTDHeadMask, true);
 
   //
   // Iterate through chain.
@@ -781,29 +939,21 @@ void WiiOHCI::removeEndpointTransfers(OHCIEndpointData *endpoint) {
 //
 // Removes all transfers up until and including one with a completion.
 //
-void WiiOHCI::completeFailedEndpointGenTransfers(OHCIEndpointData *endpoint, IOReturn tdStatus, UInt32 bufferSizeRemaining) {
+void WiiOHCI::completeFailedEndpointGenTransfers(OHCITransferData *failedTransfer, IOReturn tdStatus) {
+  OHCIEndpointData  *endpoint;
   OHCITransferData  *transferCurr;
   OHCITransferData  *transferNext;
-  UInt32            endpointFlags;
-  UInt32            endpointNumber;
-  bool              isDefaultControlEndpoint;
+  UInt32            bufferSizeRemaining;
+
+  endpoint = failedTransfer->endpoint;
+  bufferSizeRemaining = 0;
 
   //
   // Mark endpoint as skipped and wait until next frame.
   //
-  endpoint->ed->flags |= HostToUSBLong(kOHCIEDFlagsSkip);
-  writeReg32(kOHCIRegIntStatus, kOHCIRegIntStatusStartOfFrame);
-  while ((readReg32(kOHCIRegIntStatus) & kOHCIRegIntStatusStartOfFrame) == 0) {
-    IODelay(10);
-  }
+  quiesceEndpoint(endpoint);
 
-  endpointFlags = USBToHostLong(endpoint->ed->flags);
-  endpointNumber = (endpointFlags & kOHCIEDFlagsEndpointMask) >> kOHCIEDFlagsEndpointShift;
-  isDefaultControlEndpoint = !endpoint->isochronous
-    && (endpointNumber == 0)
-    && ((endpointFlags & kOHCIEDFlagsDirectionMask) == kOHCIEDFlagsDirectionTD);
-
-  transferCurr = getTransferFromPhys(USBToHostLong(endpoint->ed->headTDPhysAddr) & kOHCIEDTDHeadMask);
+  transferCurr = failedTransfer;
   while (transferCurr != endpoint->transferTail) {
     if (transferCurr == NULL) {
       // Shouldn't occur.
@@ -814,7 +964,7 @@ void WiiOHCI::completeFailedEndpointGenTransfers(OHCIEndpointData *endpoint, IOR
     //
     // Unlink the transfer descriptor and get the buffer size.
     //
-    endpoint->ed->headTDPhysAddr = HostToUSBLong(transferCurr->nextTransfer->physAddr) | (endpoint->ed->headTDPhysAddr & ~(HostToUSBLong(kOHCIEDTDHeadMask)));
+    updateEndpointHead(endpoint, transferCurr->nextTransfer->physAddr, true);
     bufferSizeRemaining += getGenTransferBufferRemaining(transferCurr);
 
     if (transferCurr->srcBuffer != NULL) {
@@ -822,13 +972,6 @@ void WiiOHCI::completeFailedEndpointGenTransfers(OHCIEndpointData *endpoint, IOR
     }
 
     if (transferCurr->last) {
-      //
-      // Endpoint zero must recover after a failed control request, even if the
-      // device responded with STALL. Other endpoints still preserve a true halt.
-      //
-      if ((tdStatus != kIOUSBPipeStalled) || isDefaultControlEndpoint) {
-        endpoint->ed->headTDPhysAddr = HostToUSBLong(USBToHostLong(endpoint->ed->headTDPhysAddr) & kOHCIEDTDHeadMask);
-      }
       if (tdStatus == kIOReturnUnderrun) {
         tdStatus = kIOReturnSuccess;
       }
@@ -840,7 +983,7 @@ void WiiOHCI::completeFailedEndpointGenTransfers(OHCIEndpointData *endpoint, IOR
       return;
     }
 
-    transferNext = getTransferFromPhys(USBToHostLong(transferCurr->genTD->nextTDPhysAddr));
+    transferNext = transferCurr->nextTransfer;
     returnTransfer(transferCurr);
     transferCurr = transferNext;
   }
