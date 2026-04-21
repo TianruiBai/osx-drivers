@@ -192,7 +192,17 @@ OHCITransferData *WiiOHCI::getFreeTransfer(OHCIEndpointData *endpoint) {
     transfer->genTD->nextTDPhysAddr = 0;
   }
 
+  transfer->type               = endpoint->isochronous ? kOHCITransferTypeIsochronous : kOHCITransferTypeGeneral;
+  transfer->direction          = kUSBAnyDirn;
+  transfer->last               = false;
   transfer->bounceBuffer       = NULL;
+  transfer->actualBufferSize   = 0;
+  transfer->srcBuffer          = NULL;
+  bzero(&transfer->genCompletion, sizeof (transfer->genCompletion));
+  transfer->isoFrames          = NULL;
+  transfer->isoFrameStart      = 0;
+  transfer->isoFrameIndex      = 0;
+  transfer->isoBufferCopied    = false;
   transfer->endpoint           = endpoint;
 
   return transfer;
@@ -268,6 +278,28 @@ IOReturn WiiOHCI::initControlEndpoints(void) {
   //
   writeReg32(kOHCIRegControlCurrentED, 0);
   writeReg32(kOHCIRegControlHeadED, _controlEndpointHeadPtr->physAddr);
+
+  //
+  // Latte OHCI needs a one-shot empty control ED before reusing a control
+  // endpoint after prior traffic. Keep a dedicated empty ED/TD pair around
+  // so control submissions can temporarily prime the control list.
+  //
+  _controlQuirkEndpointPtr = getFreeEndpoint();
+  if (_controlQuirkEndpointPtr == NULL) {
+    return kIOReturnNoMemory;
+  }
+
+  _controlQuirkTailTransferPtr = getFreeTransfer(_controlQuirkEndpointPtr);
+  if (_controlQuirkTailTransferPtr == NULL) {
+    return kIOReturnNoMemory;
+  }
+
+  _controlQuirkEndpointPtr->transferTail = _controlQuirkTailTransferPtr;
+  _controlQuirkEndpointPtr->ed->flags = HostToUSBLong(kOHCIEDFlagsDirectionOut);
+  _controlQuirkEndpointPtr->ed->headTDPhysAddr = HostToUSBLong(_controlQuirkTailTransferPtr->physAddr);
+  _controlQuirkEndpointPtr->ed->tailTDPhysAddr = HostToUSBLong(_controlQuirkTailTransferPtr->physAddr);
+  _controlQuirkEndpointPtr->ed->nextEDPhysAddr = HostToUSBLong(0);
+  _controlQuirkEndpointPtr->nextEndpoint = NULL;
 
   return kIOReturnSuccess;
 }
@@ -752,6 +784,9 @@ void WiiOHCI::removeEndpointTransfers(OHCIEndpointData *endpoint) {
 void WiiOHCI::completeFailedEndpointGenTransfers(OHCIEndpointData *endpoint, IOReturn tdStatus, UInt32 bufferSizeRemaining) {
   OHCITransferData  *transferCurr;
   OHCITransferData  *transferNext;
+  UInt32            endpointFlags;
+  UInt32            endpointNumber;
+  bool              isDefaultControlEndpoint;
 
   //
   // Mark endpoint as skipped and wait until next frame.
@@ -761,6 +796,12 @@ void WiiOHCI::completeFailedEndpointGenTransfers(OHCIEndpointData *endpoint, IOR
   while ((readReg32(kOHCIRegIntStatus) & kOHCIRegIntStatusStartOfFrame) == 0) {
     IODelay(10);
   }
+
+  endpointFlags = USBToHostLong(endpoint->ed->flags);
+  endpointNumber = (endpointFlags & kOHCIEDFlagsEndpointMask) >> kOHCIEDFlagsEndpointShift;
+  isDefaultControlEndpoint = !endpoint->isochronous
+    && (endpointNumber == 0)
+    && ((endpointFlags & kOHCIEDFlagsDirectionMask) == kOHCIEDFlagsDirectionTD);
 
   transferCurr = getTransferFromPhys(USBToHostLong(endpoint->ed->headTDPhysAddr) & kOHCIEDTDHeadMask);
   while (transferCurr != endpoint->transferTail) {
@@ -782,10 +823,13 @@ void WiiOHCI::completeFailedEndpointGenTransfers(OHCIEndpointData *endpoint, IOR
 
     if (transferCurr->last) {
       //
-      // For underruns, just pretend it didn't occur.
+      // Endpoint zero must recover after a failed control request, even if the
+      // device responded with STALL. Other endpoints still preserve a true halt.
       //
+      if ((tdStatus != kIOUSBPipeStalled) || isDefaultControlEndpoint) {
+        endpoint->ed->headTDPhysAddr = HostToUSBLong(USBToHostLong(endpoint->ed->headTDPhysAddr) & kOHCIEDTDHeadMask);
+      }
       if (tdStatus == kIOReturnUnderrun) {
-        endpoint->ed->headTDPhysAddr &= ~(HostToUSBLong(kOHCIEDTDHeadHalted));
         tdStatus = kIOReturnSuccess;
       }
 

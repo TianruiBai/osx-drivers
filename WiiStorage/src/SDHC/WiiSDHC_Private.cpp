@@ -7,29 +7,98 @@
 
 #include "WiiSDHC.hpp"
 
+static IOReturn WiiSDHCStatusFromError(UInt16 errorStatus) {
+  if (errorStatus & (kSDHCRegErrorIntStatusCommandTimeout | kSDHCRegErrorIntStatusDataTimeout)) {
+    return kIOReturnTimeout;
+  }
+
+  if (errorStatus != 0) {
+    return kIOReturnIOError;
+  }
+
+  return kIOReturnSuccess;
+}
+
+void WiiSDHC::serviceInterruptStatus(UInt32 rawIntStatus) {
+  UInt16 normalIntStatus;
+  UInt16 errorIntStatus;
+
+  if (rawIntStatus == 0) {
+    return;
+  }
+
+  normalIntStatus = (UInt16)(rawIntStatus & 0xFFFF);
+  errorIntStatus = (UInt16)(rawIntStatus >> 16);
+
+  WIIDBGLOG("Got interrupt raw=0x%08X normal=0x%04X error=0x%04X", rawIntStatus, normalIntStatus, errorIntStatus);
+
+  writeReg32(kSDHCRegNormalIntStatus, rawIntStatus);
+  (void) readReg32(kSDHCRegNormalIntStatus);
+
+  if (_currentCommand != NULL) {
+    _commandTimeoutRemainingUS = kSDHCCommandTimeoutMS;
+    doAsyncIO(normalIntStatus, errorIntStatus);
+  } else {
+    WIISYSLOG("Spurious SDHC interrupt with no active command: normal=0x%X error=0x%X", normalIntStatus, errorIntStatus);
+  }
+}
+
 //
 // Handles interrupts.
 //
 // This function must only be called within the work loop context.
 //
 void WiiSDHC::handleInterrupt(IOInterruptEventSource *intEventSource, int count) {
-  UInt32 intStatus;
+  (void) intEventSource;
+  (void) count;
 
-  intStatus = readReg32(kSDHCRegNormalIntStatus);
-  WIIDBGLOG("Got the interrupt: 0x%X", intStatus);
+  serviceInterruptStatus(readReg32(kSDHCRegNormalIntStatus));
+}
 
-  //
-  // Handle interrupts.
-  //
-  writeReg32(kSDHCRegNormalIntStatus, intStatus);
+void WiiSDHC::commandWatchdogFired(IOTimerEventSource *timerSource) {
+  UInt32 rawIntStatus;
+  UInt16 errorIntStatus;
+  IOReturn status;
 
-  if (_currentCommand != NULL) {
-    doAsyncIO(intStatus);
-  } else {
-    WIISYSLOG("No command?: 0x%X", intStatus);
+  (void) timerSource;
+
+  if (_currentCommand == NULL) {
+    return;
   }
 
+  rawIntStatus = readReg32(kSDHCRegNormalIntStatus);
+  if (rawIntStatus != 0) {
+    serviceInterruptStatus(rawIntStatus);
+    if (_currentCommand == NULL) {
+      return;
+    }
+  }
 
+  if (_commandTimeoutRemainingUS <= 1000) {
+    rawIntStatus = readReg32(kSDHCRegNormalIntStatus);
+    errorIntStatus = (UInt16)(rawIntStatus >> 16);
+    status = WiiSDHCStatusFromError(errorIntStatus);
+    if (status == kIOReturnSuccess) {
+      status = kIOReturnTimeout;
+    }
+
+    WIISYSLOG("Command watchdog timed out on CMD%u: ps=0x%X rawInt=0x%08X clock=0x%X power=0x%X hostctl=0x%X arg=0x%X",
+      _currentCommand->getCommandIndex(),
+      readReg32(kSDHCRegPresentState),
+      rawIntStatus,
+      readReg16(kSDHCRegClockControl),
+      readReg8(kSDHCRegPowerControl),
+      readReg8(kSDHCRegHostControl1),
+      readReg32(kSDHCRegArgument));
+
+    resetController(kSDHCRegSoftwareResetCmd | kSDHCRegSoftwareResetDat);
+    _currentCommand->state = kWiiSDCommandStateComplete;
+    completeIO(status);
+    return;
+  }
+
+  _commandTimeoutRemainingUS -= 1000;
+  _commandTimerSource->setTimeoutUS(1000);
 }
 
 //
@@ -196,8 +265,8 @@ void WiiSDHC::setControllerPower(bool enabled) {
   //
   // Get highest supported card voltage and enable it.
   //
-  UInt32 hcCaps       = readReg32(kSDHCRegCapabilities);
-  UInt16 powerControl = readReg16(kSDHCRegPowerControl);
+  UInt32 hcCaps      = readReg32(kSDHCRegCapabilities);
+  UInt8  powerControl = readReg8(kSDHCRegPowerControl);
   if (hcCaps & kSDHCRegCapabilitiesVoltage3_3Supported) {
     powerControl |= kSDHCRegPowerControlVDD1_3_3;
     WIIDBGLOG("Card voltage: 3.3V");
@@ -208,13 +277,13 @@ void WiiSDHC::setControllerPower(bool enabled) {
     powerControl |= kSDHCRegPowerControlVDD1_1_8;
     WIIDBGLOG("Card voltage: 1.8V");
   }
-  writeReg16(kSDHCRegPowerControl, powerControl);
+  writeReg8(kSDHCRegPowerControl, powerControl);
 
   //
   // Turn power on to card.
   //
-  writeReg16(kSDHCRegPowerControl, readReg16(kSDHCRegPowerControl) | kSDHCRegPowerControlVDD1On);
-  WIIDBGLOG("Card power control register is now 0x%X", readReg16(kSDHCRegPowerControl));
+  writeReg8(kSDHCRegPowerControl, readReg8(kSDHCRegPowerControl) | kSDHCRegPowerControlVDD1On);
+  WIIDBGLOG("Card power control register is now 0x%X", readReg8(kSDHCRegPowerControl));
   IOSleep(50);
 }
 
@@ -222,7 +291,7 @@ void WiiSDHC::setControllerPower(bool enabled) {
 // Sets the controller bus width bits.
 //
 void WiiSDHC::setControllerBusWidth(SDBusWidth busWidth) {
-  UInt16 hcControl = readReg16(kSDHCRegHostControl1) & ~kSDHCRegHostControl1DataWidthMask;
+  UInt8 hcControl = readReg8(kSDHCRegHostControl1) & ~kSDHCRegHostControl1DataWidthMask;
   if (busWidth == kSDBusWidth4) {
     hcControl |= kSDHCRegHostControl1DataWidth4Bit;
     WIIDBGLOG("Setting controller bus width to 4-bit mode");
@@ -232,5 +301,5 @@ void WiiSDHC::setControllerBusWidth(SDBusWidth busWidth) {
   } else {
     WIIDBGLOG("Setting controller bus width to 1-bit mode");
   }
-  writeReg16(kSDHCRegHostControl1, hcControl);
+  writeReg8(kSDHCRegHostControl1, hcControl);
 }

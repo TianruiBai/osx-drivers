@@ -26,6 +26,7 @@
 #define kWiiOHCIBounceBufferJumboInitialCount 64
 // Refresh rate for isochronous transfer buffers.
 #define kWiiOHCIIsoTimerRefreshUS             500
+#define kWiiOHCIWatchdogRefreshUS             250000
 
 //
 // Total interrupt nodes in tree.
@@ -130,6 +131,7 @@ private:
   // Interrupts.
   //
   IOFilterInterruptEventSource  *_interruptEventSource;
+  IOTimerEventSource            *_watchdogEventSource;
   IOWorkLoop                    *_isoInTimerWorkLoop;
   IOWorkLoop                    *_isoOutTimerWorkLoop;
   IOTimerEventSource            *_isoInTimerEventSource;
@@ -158,6 +160,8 @@ private:
   // Control endpoints.
   OHCIEndpointData      *_controlEndpointHeadPtr;
   OHCIEndpointData      *_controlEndpointTailPtr;
+  OHCIEndpointData      *_controlQuirkEndpointPtr;
+  OHCITransferData      *_controlQuirkTailTransferPtr;
 
   // Bulk endpoints.
   OHCIEndpointData      *_bulkEndpointHeadPtr;
@@ -216,7 +220,9 @@ private:
   // Interrupt functions.
   //
   bool filterInterrupt(IOFilterInterruptEventSource *filterIntEventSource);
+  void queueDoneHeadTransfers(IOPhysicalAddress doneHeadPhysAddr, bool *signalSecondaryInt);
   void handleInterrupt(IOInterruptEventSource *intEventSource, int count);
+  void handleWatchdog(IOTimerEventSource *sender);
   void handleIsoInTimer(IOTimerEventSource *sender);
   void handleIsoOutTimer(IOTimerEventSource *sender);
 
@@ -247,6 +253,7 @@ private:
   void returnTransfer(OHCITransferData *transfer);
 
   IOReturn initControlEndpoints(void);
+  void primeControlListForLatte(void);
   IOReturn initBulkEndpoints(void);
   IOReturn initIsoEndpoints(void);
   IOReturn initInterruptEndpoints(void);
@@ -271,7 +278,7 @@ private:
   IOReturn doIsochTransfer(short functionAddress, short endpointNumber, IOUSBIsocCompletion completion, UInt8 direction,
                            UInt64 frameStart, IOMemoryDescriptor *pBuffer, UInt32 frameCount, IOUSBIsocFrame *pFrames,
                            UInt32 updateFrequency, bool isLowLatency);
-  void completeGeneralTransfer(OHCITransferData *transfer);
+  bool completeGeneralTransfer(OHCITransferData *transfer);
   void completeIsochTransfer(OHCITransferData *transfer, IOReturn status);
   void completeTransferQueue(OHCITransferData *headTransfer);
 
@@ -322,6 +329,7 @@ public:
   // Overrides.
   //
   bool init(OSDictionary *dictionary = 0);
+  IOService *probe(IOService *provider, SInt32 *score);
 
   IOReturn GetRootHubDeviceDescriptor(IOUSBDeviceDescriptor *desc);
   IOReturn GetRootHubDescriptor(IOUSBHubDescriptor *desc);

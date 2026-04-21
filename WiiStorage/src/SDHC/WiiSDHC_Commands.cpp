@@ -219,8 +219,9 @@ void WiiSDHC::dispatchNext(void) {
 //
 // This function must only be called within the work loop context.
 //
-void WiiSDHC::doAsyncIO(UInt32 intStatus) {
+void WiiSDHC::doAsyncIO(UInt16 normalIntStatus, UInt16 errorIntStatus) {
   UInt32              timeout;
+  UInt32              staleIntStatus;
   UInt16              commandValue;
   UInt16              transferMode;
   IOMemoryDescriptor  *memoryDescriptor;
@@ -230,7 +231,7 @@ void WiiSDHC::doAsyncIO(UInt32 intStatus) {
   IOReturn            status;
 
   status = kIOReturnSuccess;
-  WIIDBGLOG("State machine: %u, int: 0x%X", _currentCommand->state, intStatus);
+  WIIDBGLOG("State machine: %u, normal=0x%X error=0x%X", _currentCommand->state, normalIntStatus, errorIntStatus);
   switch (_currentCommand->state) {
     //
     // Command is starting.
@@ -305,12 +306,29 @@ void WiiSDHC::doAsyncIO(UInt32 intStatus) {
       }
 
       //
+      // Clear any stale interrupt status from a previous command before issuing a new one.
+      //
+      staleIntStatus = readReg32(kSDHCRegNormalIntStatus);
+      if (staleIntStatus != 0) {
+        WIIDBGLOG("Clearing stale status before CMD%u: raw=0x%08X", _currentCommand->getCommandIndex(), staleIntStatus);
+        writeReg32(kSDHCRegNormalIntStatus, staleIntStatus);
+        (void) readReg32(kSDHCRegNormalIntStatus);
+      }
+
+      //
       // Write data for command.
       // Command must be written together with transfer mode as both are 16-bit registers.
+      // Read back the present-state register afterwards so the MMIO write is observed by the controller
+      // before we sleep waiting for either an interrupt or the watchdog poll.
       //
       writeReg32(kSDHCRegArgument, _currentCommand->getArgument());
       writeReg32(kSDHCRegTransferMode, transferMode | (commandValue << 16));
       _currentCommand->state = kWiiSDCommandStateCmd;
+      _commandTimeoutRemainingUS = kSDHCCommandTimeoutMS;
+      if (_commandTimerSource != NULL) {
+        _commandTimerSource->setTimeoutUS(1000);
+      }
+      (void) readReg32(kSDHCRegPresentState);
       break;
 
     //
@@ -318,11 +336,20 @@ void WiiSDHC::doAsyncIO(UInt32 intStatus) {
     // For data commands, data transfer will occur afterwards.
     //
     case kWiiSDCommandStateCmd:
+      if ((errorIntStatus != 0) || ((normalIntStatus & kSDHCRegNormalIntStatusErrorInterrupt) != 0)) {
+        WIISYSLOG("CMD%u failed: normal=0x%X error=0x%X ps=0x%X arg=0x%X",
+          _currentCommand->getCommandIndex(), normalIntStatus, errorIntStatus,
+          readReg32(kSDHCRegPresentState), _currentCommand->getArgument());
+        _currentCommand->state = kWiiSDCommandStateComplete;
+        status = (errorIntStatus & (kSDHCRegErrorIntStatusCommandTimeout | kSDHCRegErrorIntStatusDataTimeout)) != 0 ? kIOReturnTimeout : kIOReturnIOError;
+        break;
+      }
+
       //
       // Ensure we got the command complete interrupt.
       //
-      if ((intStatus & kSDHCRegNormalIntStatusCommandComplete) == 0) {
-        WIISYSLOG("Command completed without interrupt? 0x%X", intStatus);
+      if ((normalIntStatus & kSDHCRegNormalIntStatusCommandComplete) == 0) {
+        WIISYSLOG("Command completed without command-complete status? 0x%X", normalIntStatus);
         _currentCommand->state = kWiiSDCommandStateComplete;
         status                 = kIOReturnIOError;
         break;
@@ -351,16 +378,24 @@ void WiiSDHC::doAsyncIO(UInt32 intStatus) {
       //
       // Check if DMA is ready or transfer has completed, if not wait until the next interrupt.
       //
-      if ((intStatus & (kSDHCRegNormalIntStatusDMAInterrupt | kSDHCRegNormalIntStatusTransferComplete)) == 0) {
+      if ((normalIntStatus & (kSDHCRegNormalIntStatusDMAInterrupt | kSDHCRegNormalIntStatusTransferComplete)) == 0) {
         break;
       }
 
     case kWiiSDCommandStateDataTx:
+      if ((errorIntStatus != 0) || ((normalIntStatus & kSDHCRegNormalIntStatusErrorInterrupt) != 0)) {
+        WIISYSLOG("CMD%u data phase failed: normal=0x%X error=0x%X ps=0x%X",
+          _currentCommand->getCommandIndex(), normalIntStatus, errorIntStatus, readReg32(kSDHCRegPresentState));
+        _currentCommand->state = kWiiSDCommandStateComplete;
+        status = (errorIntStatus & (kSDHCRegErrorIntStatusCommandTimeout | kSDHCRegErrorIntStatusDataTimeout)) != 0 ? kIOReturnTimeout : kIOReturnIOError;
+        break;
+      }
+
       //
       // Ensure we got either a DMA or a transfer complete interrupt.
       //
-      if ((intStatus & (kSDHCRegNormalIntStatusDMAInterrupt | kSDHCRegNormalIntStatusTransferComplete)) == 0) {
-        WIISYSLOG("Command data without interrupt? 0x%X", intStatus);
+      if ((normalIntStatus & (kSDHCRegNormalIntStatusDMAInterrupt | kSDHCRegNormalIntStatusTransferComplete)) == 0) {
+        WIISYSLOG("Command data without DMA/transfer status? 0x%X", normalIntStatus);
         _currentCommand->state = kWiiSDCommandStateComplete;
         status                 = kIOReturnIOError;
         break;
@@ -394,7 +429,7 @@ void WiiSDHC::doAsyncIO(UInt32 intStatus) {
       //
       // On transfer completed, verify we processed all the data.
       //
-      if ((intStatus & kSDHCRegNormalIntStatusTransferComplete) != 0) {
+      if ((normalIntStatus & kSDHCRegNormalIntStatusTransferComplete) != 0) {
         if (_currentCommand->getActualByteCount() != (_currentCommand->getBlockCount() * _cardBlockLength)) {
           WIISYSLOG("Didn't get all the data here");
           status = kIOReturnIOError;
@@ -517,6 +552,10 @@ void WiiSDHC::completeIO(IOReturn status) {
   }
   _currentCommand = NULL;
   _sdhcState      = kSDHCStateFree;
+  _commandTimeoutRemainingUS = 0;
+  if (_commandTimerSource != NULL) {
+    _commandTimerSource->cancelTimeout();
+  }
 
   //
   // Command is done, set result and invoke callback.

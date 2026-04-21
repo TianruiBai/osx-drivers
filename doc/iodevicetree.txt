@@ -1,0 +1,222 @@
++-o Root  <class IORegistryEntry, retain count 8>
+  +-o WiiU  <class IOPlatformExpertDevice, registered, matched, active, busy 0,$
+    +-o WiiPE  <class WiiPE, !registered, !matched, active, busy 0, retain coun$
+    | +-o IOPMrootDomain  <class IOPMrootDomain, registered, matched, active, b$
+    | | +-o IORootParent  <class IORootParent, !registered, !matched, active, b$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | | +-o RootDomainUserClient  <class RootDomainUserClient, !registered, !ma$
+    | +-o options  <class IODTNVRAM, registered, matched, active, busy 0, retai$
+    | +-o PowerPC,Espresso@0  <class IOPlatformDevice, registered, matched, act$
+    | | +-o AppleCPU  <class AppleCPU, registered, matched, active, busy 0, ret$
+    | |   +-o IOCPUInterruptController  <class IOCPUInterruptController, regist$
+    | +-o builtin  <class IOPlatformDevice, registered, matched, active, busy 0$
+    | +-o cpus  <class IOPlatformDevice, registered, matched, active, busy 0, r$
+    | +-o interrupt-controller@c000000  <class IOPlatformDevice, registered, ma$
+    | | +-o WiiInterruptController  <class WiiInterruptController, registered, $
+    | +-o si@d006400  <class IOPlatformDevice, registered, matched, active, bus$
+    | +-o exi@d006800  <class IOPlatformDevice, registered, matched, active, bu$
+    | | +-o WiiEXI  <class WiiEXI, registered, matched, active, busy 0, retain $
+    | +-o audio-controller@d006c00  <class IOPlatformDevice, registered, matche$
+    | | +-o WiiAudioDevice  <class WiiAudioDevice, registered, matched, active,$
+    | |   +-o WiiAudioEngine  <class WiiAudioEngine, registered, matched, activ$
+    | |   | +-o IOAudioLevelControl  <class IOAudioLevelControl, !registered, !$
+    | |   | | +-o IOAudioControlUserClient  <class IOAudioControlUserClient, !r$
+    | |   | | +-o IOAudioControlUserClient  <class IOAudioControlUserClient, !r$
+    | |   | +-o IOAudioToggleControl  <class IOAudioToggleControl, !registered,$
+    | |   | | +-o IOAudioControlUserClient  <class IOAudioControlUserClient, !r$
+    | |   | | +-o IOAudioControlUserClient  <class IOAudioControlUserClient, !r$
+    | |   | +-o IOAudioSelectorControl  <class IOAudioSelectorControl, !registe$
+    | |   | | +-o IOAudioControlUserClient  <class IOAudioControlUserClient, !r$
+    | |   | | +-o IOAudioControlUserClient  <class IOAudioControlUserClient, !r$
+    | |   | +-o IOAudioStream  <class IOAudioStream, registered, matched, activ$
+    | |   | +-o IOAudioEngineUserClient  <class IOAudioEngineUserClient, !regis$
+    | |   | +-o IOAudioEngineUserClient  <class IOAudioEngineUserClient, !regis$
+    | |   | +-o IOAudioEngineUserClient  <class IOAudioEngineUserClient, !regis$
+    | |   +-o WiiAudioEngine  <class WiiAudioEngine, registered, matched, activ$
+    | |     +-o IOAudioLevelControl  <class IOAudioLevelControl, !registered, !$
+    | |     | +-o IOAudioControlUserClient  <class IOAudioControlUserClient, !r$
+    | |     | +-o IOAudioControlUserClient  <class IOAudioControlUserClient, !r$
+    | |     +-o IOAudioToggleControl  <class IOAudioToggleControl, !registered,$
+    | |     | +-o IOAudioControlUserClient  <class IOAudioControlUserClient, !r$
+    | |     | +-o IOAudioControlUserClient  <class IOAudioControlUserClient, !r$
+    | |     +-o IOAudioSelectorControl  <class IOAudioSelectorControl, !registe$
+    | |     | +-o IOAudioControlUserClient  <class IOAudioControlUserClient, !r$
+    | |     | +-o IOAudioControlUserClient  <class IOAudioControlUserClient, !r$
+    | |     +-o IOAudioStream  <class IOAudioStream, registered, matched, activ$
+    | |     +-o IOAudioEngineUserClient  <class IOAudioEngineUserClient, !regis$
+    | |     +-o IOAudioEngineUserClient  <class IOAudioEngineUserClient, !regis$
+    | |     +-o IOAudioEngineUserClient  <class IOAudioEngineUserClient, !regis$
+    | +-o dsp@c280000  <class IOPlatformDevice, registered, matched, active, bu$
+    | +-o aes@d020000  <class IOPlatformDevice, registered, matched, active, bu$
+    | +-o sha@d030000  <class IOPlatformDevice, registered, matched, active, bu$
+    | +-o usb@d040000  <class IOPlatformDevice, registered, matched, active, bu$
+    | +-o usb@d050000  <class IOPlatformDevice, registered, matched, active, bu$
+    | | +-o WiiOHCI  <class WiiOHCI, !registered, !matched, active, busy 0, ret$
+    | |   +-o OHCI Root Hub Simulation@d050000  <class IOUSBRootHubDevice, regi$
+    | |   | +-o AppleUSBHub  <class AppleUSBHub, !registered, !matched, active,$
+    | |   | +-o IOUSBInterface@0  <class IOUSBInterface, !registered, !matched,$
+    | |   | +-o IOUSBUserClientInit  <class IOUSBUserClientInit, !registered, !$
+    | |   +-o Keychron K7 Pro@ff200000  <class IOUSBDevice, registered, matched$
+    | |   | +-o IOUSBCompositeDriver  <class IOUSBCompositeDriver, !registered,$
+    | |   | +-o IOUSBInterface@0  <class IOUSBInterface, registered, matched, a$
+    | |   | | +-o IOUSBHIDDriver  <class IOUSBHIDDriver, registered, matched, a$
+    | |   | | | +-o IOHIDLibUserClientIniter  <class IOHIDLibUserClientIniter, $
+    | |   | | | +-o IOHIDInterface  <class IOHIDInterface, registered, matched,$
+    | |   | | |   +-o IOHIDEventDriver  <class IOHIDEventDriver, registered, ma$
+    | |   | | |     +-o IOHIDKeyboard  <class IOHIDKeyboard, registered, matche$
+    | |   | | |     | +-o IOHIDSystem  <class IOHIDSystem, registered, matched,$
+    | |   | | |     | | +-o IOHIDUserClient  <class IOHIDUserClient, !registere$
+    | |   | | |     | | +-o IOHIDParamUserClient  <class IOHIDParamUserClient, $
+    | |   | | |     | +-o IOBSDConsole  <class IOBSDConsole, !registered, !matc$
+    | |   | | |     +-o IOHIDSystem  <class IOHIDSystem, registered, matched, a$
+    | |   | | |       +-o IOHIDUserClient  <class IOHIDUserClient, !registered,$
+    | |   | | |       +-o IOHIDParamUserClient  <class IOHIDParamUserClient, !r$
+    | |   | | +-o IOUSBUserClientInit  <class IOUSBUserClientInit, !registered,$
+    | |   | +-o IOUSBInterface@1  <class IOUSBInterface, registered, matched, a$
+    | |   | | +-o IOUSBHIDDriver  <class IOUSBHIDDriver, registered, matched, a$
+    | |   | | | +-o IOHIDInterface  <class IOHIDInterface, registered, matched,$
+    | |   | | | +-o IOHIDLibUserClientIniter  <class IOHIDLibUserClientIniter, $
+    | |   | | +-o IOUSBUserClientInit  <class IOUSBUserClientInit, !registered,$
+    | |   | +-o IOUSBInterface@2  <class IOUSBInterface, registered, matched, a$
+    | |   | | +-o IOUSBHIDDriver  <class IOUSBHIDDriver, registered, matched, a$
+    | |   | | | +-o IOHIDInterface  <class IOHIDInterface, registered, matched,$
+    | |   | | | | +-o IOHIDEventDriver  <class IOHIDEventDriver, registered, ma$
+    | |   | | | |   +-o IOHIDPointing  <class IOHIDPointing, registered, matche$
+    | |   | | | |   | +-o IOHIDSystem  <class IOHIDSystem, registered, matched,$
+    | |   | | | |   |   +-o IOHIDUserClient  <class IOHIDUserClient, !registere$
+    | |   | | | |   |   +-o IOHIDParamUserClient  <class IOHIDParamUserClient, $
+    | |   | | | |   +-o IOHIDKeyboard  <class IOHIDKeyboard, registered, matche$
+    | |   | | | |   | +-o IOHIDSystem  <class IOHIDSystem, registered, matched,$
+    | |   | | | |   | | +-o IOHIDUserClient  <class IOHIDUserClient, !registere$
+    | |   | | | |   | | +-o IOHIDParamUserClient  <class IOHIDParamUserClient, $
+    | |   | | | |   | +-o IOBSDConsole  <class IOBSDConsole, !registered, !matc$
+    | |   | | | |   +-o IOHIDConsumer  <class IOHIDConsumer, registered, matche$
+    | |   | | | |   | +-o IOHIDSystem  <class IOHIDSystem, registered, matched,$
+    | |   | | | |   | | +-o IOHIDUserClient  <class IOHIDUserClient, !registere$
+    | |   | | | |   | | +-o IOHIDParamUserClient  <class IOHIDParamUserClient, $
+    | |   | | | |   | +-o IOBSDConsole  <class IOBSDConsole, !registered, !matc$
+    | |   | | | |   +-o IOHIDSystem  <class IOHIDSystem, registered, matched, a$
+    | |   | | | |     +-o IOHIDUserClient  <class IOHIDUserClient, !registered,$
+    | |   | | | |     +-o IOHIDParamUserClient  <class IOHIDParamUserClient, !r$
+    | |   | | | +-o IOHIDLibUserClientIniter  <class IOHIDLibUserClientIniter, $
+    | |   | | +-o IOUSBUserClientInit  <class IOUSBUserClientInit, !registered,$
+    | |   | +-o IOUSBUserClientInit  <class IOUSBUserClientInit, !registered, !$
+    | |   +-o G102 LIGHTSYNC Gaming Mouse@ff100000  <class IOUSBDevice, registe$
+    | |     +-o IOUSBCompositeDriver  <class IOUSBCompositeDriver, !registered,$
+    | |     +-o IOUSBInterface@0  <class IOUSBInterface, registered, matched, a$
+    | |     | +-o IOUSBHIDDriver  <class IOUSBHIDDriver, registered, matched, a$
+    | |     | | +-o IOHIDLibUserClientIniter  <class IOHIDLibUserClientIniter, $
+    | |     | | +-o IOHIDInterface  <class IOHIDInterface, registered, matched,$
+    | |     | |   +-o IOHIDEventDriver  <class IOHIDEventDriver, registered, ma$
+    | |     | |     +-o IOHIDPointing  <class IOHIDPointing, registered, matche$
+    | |     | |     | +-o IOHIDSystem  <class IOHIDSystem, registered, matched,$
+    | |     | |     |   +-o IOHIDUserClient  <class IOHIDUserClient, !registere$
+    | |     | |     |   +-o IOHIDParamUserClient  <class IOHIDParamUserClient, $
+    | |     | |     +-o IOHIDConsumer  <class IOHIDConsumer, registered, matche$
+    | |     | |     | +-o IOHIDSystem  <class IOHIDSystem, registered, matched,$
+    | |     | |     | | +-o IOHIDUserClient  <class IOHIDUserClient, !registere$
+    | |     | |     | | +-o IOHIDParamUserClient  <class IOHIDParamUserClient, $
+    | |     | |     | +-o IOBSDConsole  <class IOBSDConsole, !registered, !matc$
+    | |     | |     +-o IOHIDSystem  <class IOHIDSystem, registered, matched, a$
+    | |     | |       +-o IOHIDUserClient  <class IOHIDUserClient, !registered,$
+    | |     | |       +-o IOHIDParamUserClient  <class IOHIDParamUserClient, !r$
+    | |     | +-o IOUSBUserClientInit  <class IOUSBUserClientInit, !registered,$
+    | |     +-o IOUSBInterface@1  <class IOUSBInterface, registered, matched, a$
+    | |     | +-o IOUSBHIDDriver  <class IOUSBHIDDriver, registered, matched, a$
+    | |     | | +-o IOHIDLibUserClientIniter  <class IOHIDLibUserClientIniter, $
+    | |     | | +-o IOHIDInterface  <class IOHIDInterface, registered, matched,$
+    | |     | |   +-o IOHIDEventDriver  <class IOHIDEventDriver, registered, ma$
+    | |     | |     +-o IOHIDKeyboard  <class IOHIDKeyboard, registered, matche$
+    | |     | |     | +-o IOHIDSystem  <class IOHIDSystem, registered, matched,$
+    | |     | |     | | +-o IOHIDUserClient  <class IOHIDUserClient, !registere$
+    | |     | |     | | +-o IOHIDParamUserClient  <class IOHIDParamUserClient, $
+    | |     | |     | +-o IOBSDConsole  <class IOBSDConsole, !registered, !matc$
+    | |     | |     +-o IOHIDConsumer  <class IOHIDConsumer, registered, matche$
+    | |     | |     | +-o IOHIDSystem  <class IOHIDSystem, registered, matched,$
+    | |     | |     | | +-o IOHIDUserClient  <class IOHIDUserClient, !registere$
+    | |     | |     | | +-o IOHIDParamUserClient  <class IOHIDParamUserClient, $
+    | |     | |     | +-o IOBSDConsole  <class IOBSDConsole, !registered, !matc$
+    | |     | |     +-o IOHIDSystem  <class IOHIDSystem, registered, matched, a$
+    | |     | |       +-o IOHIDUserClient  <class IOHIDUserClient, !registered,$
+    | |     | |       +-o IOHIDParamUserClient  <class IOHIDParamUserClient, !r$
+    | |     | +-o IOUSBUserClientInit  <class IOUSBUserClientInit, !registered,$
+    | |     +-o IOUSBUserClientInit  <class IOUSBUserClientInit, !registered, !$
+    | +-o usb@d060000  <class IOPlatformDevice, registered, matched, active, bu$
+    | +-o sdhc@d070000  <class IOPlatformDevice, registered, matched, active, b$
+    | | +-o WiiSDHC  <class WiiSDHC, registered, matched, active, busy 0, retai$
+    | |   +-o WiiSDBlockStorageDevice  <class WiiSDBlockStorageDevice, register$
+    | |     +-o IOBlockStorageDriver  <class IOBlockStorageDriver, registered, $
+    | |       +-o Generic EZSD1 Media  <class IOMedia, registered, matched, act$
+    | |         +-o IOMediaBSDClient  <class IOMediaBSDClient, registered, matc$
+    | |         +-o IOApplePartitionScheme  <class IOApplePartitionScheme, !reg$
+    | |           +-o Apple@1  <class IOMedia, registered, matched, active, bus$
+    | |           | +-o IOMediaBSDClient  <class IOMediaBSDClient, registered, $
+    | |           +-o Untitled 2@2  <class IOMedia, registered, matched, active$
+    | |           | +-o IOMediaBSDClient  <class IOMediaBSDClient, registered, $
+    | |           +-o Untitled 4@4  <class IOMedia, registered, matched, active$
+    | |           | +-o IOMediaBSDClient  <class IOMediaBSDClient, registered, $
+    | |           +-o Untitled 6@6  <class IOMedia, registered, matched, active$
+    | |             +-o IOMediaBSDClient  <class IOMediaBSDClient, registered, $
+    | +-o sdio@d080000  <class IOPlatformDevice, registered, matched, active, b$
+    | +-o ipc@d800000  <class IOPlatformDevice, registered, matched, active, bu$
+    | | +-o WiiIPC  <class WiiIPC, registered, matched, active, busy 0, retain $
+    | +-o interrupt-controller@d800440  <class IOPlatformDevice, registered, ma$
+    | | +-o LatteInterruptController  <class LatteInterruptController, register$
+    | +-o gx2@c200000  <class IOPlatformDevice, registered, matched, active, bu$
+    | | +-o WiiCafeFB  <class WiiCafeFB, registered, matched, active, busy 0, r$
+    | |   +-o display0  <class IODisplayConnect, registered, matched, active, b$
+    | |   | +-o AppleDisplay  <class AppleDisplay, registered, matched, active,$
+    | |   +-o IOFramebufferUserClient  <class IOFramebufferUserClient, !registe$
+    | +-o usb@d130000  <class IOPlatformDevice, registered, matched, active, bu$
+    | | +-o WiiOHCI  <class WiiOHCI, !registered, !matched, active, busy 0, ret$
+    | |   +-o OHCI Root Hub Simulation@d130000  <class IOUSBRootHubDevice, regi$
+    | |   | +-o AppleUSBHub  <class AppleUSBHub, !registered, !matched, active,$
+    | |   | +-o IOUSBInterface@0  <class IOUSBInterface, !registered, !matched,$
+    | |   | +-o IOUSBUserClientInit  <class IOUSBUserClientInit, !registered, !$
+    | |   +-o  SanDisk 3.2Gen1@200000  <class IOUSBDevice, registered, matched,$
+    | |     +-o IOUSBCompositeDriver  <class IOUSBCompositeDriver, !registered,$
+    | |     +-o IOUSBInterface@0  <class IOUSBInterface, registered, matched, a$
+    | |     | +-o IOUSBMassStorageClass  <class IOUSBMassStorageClass, register$
+    | |     | | +-o IOSCSIPeripheralDeviceNub  <class IOSCSIPeripheralDeviceNub$
+    | |     | |   +-o IOSCSIPeripheralDeviceType00  <class IOSCSIPeripheralDevi$
+    | |     | |     +-o IOBlockStorageServices  <class IOBlockStorageServices, $
+    | |     | |       +-o IOBlockStorageDriver  <class IOBlockStorageDriver, re$
+    | |     | |         +-o USB SanDisk 3.2Gen1 Media  <class IOMedia, register$
+    | |     | |           +-o IOMediaBSDClient  <class IOMediaBSDClient, regist$
+    | |     | |           +-o IOApplePartitionScheme  <class IOApplePartitionSc$
+    | |     | |             +-o Apple@1  <class IOMedia, registered, matched, a$
+    | |     | |             | +-o IOMediaBSDClient  <class IOMediaBSDClient, re$
+    | |     | |             +-o Untitled 3@3  <class IOMedia, registered, match$
+    | |     | |               +-o IOMediaBSDClient  <class IOMediaBSDClient, re$
+    | |     | +-o IOUSBUserClientInit  <class IOUSBUserClientInit, !registered,$
+    | |     +-o IOUSBUserClientInit  <class IOUSBUserClientInit, !registered, !$
+    | +-o usb@d150000  <class IOPlatformDevice, registered, matched, active, bu$
+    +-o IOResources  <class IOResources, registered, matched, active, busy 0, r$
+      +-o com_apple_BootCache  <class com_apple_BootCache, !registered, !matche$
+      +-o IOHIDSystem  <class IOHIDSystem, registered, matched, active, busy 0,$
+      | +-o IOHIDUserClient  <class IOHIDUserClient, !registered, !matched, act$
+      | +-o IOHIDParamUserClient  <class IOHIDParamUserClient, !registered, !ma$
+      +-o IODisplayWrangler  <class IODisplayWrangler, registered, matched, act$
+      | +-o IOAccelerationUserClient  <class IOAccelerationUserClient, !registe$
+      +-o IOBSDConsole  <class IOBSDConsole, !registered, !matched, active, bus$
+      +-o CHUDKernLib  <class CHUDKernLib, registered, matched, active, busy 0,$
+      +-o CHUDProf  <class CHUDProf, registered, matched, active, busy 0, retai$
+      +-o CHUDUtils  <class CHUDUtils, registered, matched, active, busy 0, ret$
+      +-o IONetworkStack  <class IONetworkStack, registered, matched, active, b$
+      | +-o IONetworkStackUserClient  <class IONetworkStackUserClient, !registe$
+      +-o AppleSCSISubsystemGlobals  <class AppleSCSISubsystemGlobals, register$

@@ -14,6 +14,10 @@
 #include "WiiCommon.hpp"
 #include "WiiHollywood.hpp"
 
+#ifdef WII_TIGER_IOINTERRUPT_API
+typedef int IOInterruptVectorNumber;
+#endif
+
 //
 // Represents the Hollywood platform interrupt controller.
 //

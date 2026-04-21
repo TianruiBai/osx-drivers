@@ -1,20 +1,43 @@
+NATIVE_TIGER	?=	0
+MACOSX_VERSION_MIN ?=	10.4
+
 #
 # Toolchain configuration.
 #
+ifeq ($(NATIVE_TIGER),1)
+AS 			:= 	/usr/bin/as
+CC 			:= 	/usr/bin/gcc
+CXX 		:= 	/usr/bin/g++
+LD 			:= 	/usr/bin/ld
+RUN_TOOL	:=
+KERNEL_HEADERS	?=	/System/Library/Frameworks/Kernel.framework/Headers
+SDK_USR_HEADERS	?=	/Developer/SDKs/MacOSX10.4u.sdk/usr/include
+EXTRA_INCLUDES	:=	$(KERNEL_HEADERS) $(SDK_USR_HEADERS)
+else
 DARLING_SHELL	:= 	sudo darling shell
 DARLING_CLT 	:= 	/Library/Developer/DarlingCLT/usr/bin
 AS 			:= 	$(DARLING_CLT)/as
 CC 			:= 	$(DARLING_CLT)/powerpc-apple-darwin10-gcc-4.2.1
 CXX 		:= 	$(DARLING_CLT)/powerpc-apple-darwin10-g++-4.2.1
 LD 			:= 	$(DARLING_CLT)/ld_classic
+RUN_TOOL	:=	$(DARLING_SHELL)
+EXTRA_INCLUDES	:=	../MacPPCKernelSDK/Headers
+endif
 
 #
 # Toolchain flags.
 #
 ASFLAGS	=
 CFLAGS  = 	-fno-builtin -fno-common -mlong-branch -finline -fno-keep-inline-functions
-CFLAGS	+=	-fmessage-length=0  -force_cpusubtype_ALL -static -nostdinc -nostdlib -r
-CFLAGS	+=	-D__KERNEL__ -DKERNEL -DDEBUG -Wall -mmacosx-version-min=10.2 $(INCLUDE)
+CFLAGS	+=	-fmessage-length=0  -force_cpusubtype_ALL -static -nostdlib -r
+ifeq ($(NATIVE_TIGER),0)
+CFLAGS	+=	-nostdinc
+endif
+CFLAGS	+=	-D__KERNEL__ -DKERNEL -DDEBUG -Wall -mmacosx-version-min=$(MACOSX_VERSION_MIN) $(INCLUDE)
+CFLAGS	+=	-DKPI_10_4_0_PPC_COMPAT=1
+ifeq ($(NATIVE_TIGER),1)
+CFLAGS	+=	-DWII_TIGER_SDK=1 -DWII_TIGER_IOINTERRUPT_API=1
+endif
 CXXFLAGS	=	$(CFLAGS) -x c++ -fapple-kext -fno-rtti -fno-exceptions -fcheck-new
 
 #
@@ -22,14 +45,17 @@ CXXFLAGS	=	$(CFLAGS) -x c++ -fapple-kext -fno-rtti -fno-exceptions -fcheck-new
 #
 BUILD			:=	build
 BUILD_KEXT	:= build_kext
-INCLUDES	:=	../MacPPCKernelSDK/Headers ../include $(SOURCES)
+INCLUDES	:=	$(EXTRA_INCLUDES) ../include $(SOURCES)
+PLIST_FILE	?=	Info.plist
+EXCLUDED_CFILES	?=
+EXCLUDED_CXXFILES	?=
 
 #
 # Source and object files.
 #
 KMOD_CFILE		:= 	$(BUILD)/$(KEXT_NAME)-info.c
-CFILES				:=	$(foreach dir,$(SOURCES),$(wildcard $(dir)/*.c)) $(KMOD_CFILE)
-CXXFILES			:=	$(foreach dir,$(SOURCES),$(wildcard $(dir)/*.cpp))
+CFILES				:=	$(filter-out $(EXCLUDED_CFILES),$(foreach dir,$(SOURCES),$(wildcard $(dir)/*.c))) $(KMOD_CFILE)
+CXXFILES			:=	$(filter-out $(EXCLUDED_CXXFILES),$(foreach dir,$(SOURCES),$(wildcard $(dir)/*.cpp)))
 OFILES				:=	$(CFILES:%.c=$(BUILD)/%.o) $(CXXFILES:%.cpp=$(BUILD)/%.o)
 KEXT_BIN			:=	$(BUILD)/$(KEXT_NAME)
 KEXT_PLIST		:=	$(BUILD)/$(KEXT_NAME)-Info.plist
@@ -58,19 +84,19 @@ $(KMOD_CFILE): ../common/kmod_info.c
 # C source
 $(BUILD)/%.o: %.c
 	@mkdir -p $(@D)
-	$(DARLING_SHELL) $(CC) $(CFLAGS) -c $< -o $@
+	$(RUN_TOOL) $(CC) $(CFLAGS) -c $< -o $@
 
 # C++ source
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(@D)
-	$(DARLING_SHELL) $(CXX) $(CXXFLAGS) -c $< -o $@
+	$(RUN_TOOL) $(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Kext binary
 $(KEXT_BIN): $(OFILES)
-	$(DARLING_SHELL) $(CC)  $^ $(CFLAGS) -o $@
+	$(RUN_TOOL) $(CC)  $^ $(CFLAGS) -o $@
 
 # Kext plist
-$(KEXT_PLIST): Info.plist
+$(KEXT_PLIST): $(PLIST_FILE)
 	@test -d $(dir $@) || mkdir $(dir $@)
 	@cat $< | sed -e s/__BUNDLE__/$(KEXT_BUNDLE_ID)/ \
 		-e s/__MODULE__/$(KEXT_NAME)/ \

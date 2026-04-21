@@ -7,8 +7,18 @@
 
 #include "WiiCafeFB.hpp"
 #include "GX2Regs.hpp"
+#include "WiiGX2UserClient.hpp"
 
 OSDefineMetaClassAndStructors(WiiCafeFB, super);
+
+// Latte GPU7_GC vector index (IRQ2 bit 11 = vector 43). Kept here rather
+// than in LatteRegs.hpp to avoid a WiiPlatform include from WiiGraphics.
+#define kWiiCafeGPU7VectorNumber           43
+// Function names exposed by LatteInterruptController via
+// callPlatformFunction().
+#define kWiiCafeFunctionRegisterDirectIRQ    "LatteRegisterDirectIRQ"
+#define kWiiCafeFunctionUnregisterDirectIRQ  "LatteUnregisterDirectIRQ"
+#define kWiiCafeLatteControllerClass         "LatteInterruptController"
 
 #define kCursorPosOffset   4
 
@@ -25,8 +35,7 @@ enum {
 bool WiiCafeFB::init(OSDictionary *dictionary) {
   WiiCheckDebugArgs();
 
-  _memoryMap    = NULL;
-  _baseAddr     = NULL;
+  _gx2         = NULL;
   _fbMemory     = NULL;
 
   _currentDisplayModeId = 1;
@@ -37,27 +46,182 @@ bool WiiCafeFB::init(OSDictionary *dictionary) {
   _cursorBuffer = NULL;
   _cursorHwDesc = NULL;
 
+  _latteInterruptController = NULL;
+  _ihHandlerRegistered      = false;
+
   return super::init(dictionary);
+}
+
+//
+// Overrides OSObject::free().
+//
+void WiiCafeFB::free(void) {
+  if (_ihHandlerRegistered && _latteInterruptController != NULL) {
+    const OSSymbol *sym = OSSymbol::withCString(kWiiCafeFunctionUnregisterDirectIRQ);
+    if (sym != NULL) {
+      _latteInterruptController->callPlatformFunction(sym, false,
+        (void *)(uintptr_t) kWiiCafeGPU7VectorNumber,
+        NULL, NULL, NULL);
+      sym->release();
+    }
+    _ihHandlerRegistered = false;
+  }
+  OSSafeReleaseNULL(_latteInterruptController);
+
+  OSSafeReleaseNULL(_gx2);
+  OSSafeReleaseNULL(_cursorHwDesc);
+
+  if (_cursorBuffer != NULL) {
+    IOFree(_cursorBuffer, kWiiGX2CursorMaxSize);
+    _cursorBuffer = NULL;
+  }
+
+  super::free();
 }
 
 //
 // Overrides IOFramebuffer::start().
 //
 bool WiiCafeFB::start(IOService *provider) {
-  WIIDBGLOG("Initializing Cafe framebuffer");
+  WIISYSLOG("Initializing Cafe framebuffer");
 
   //
-  // Map controller memory.
+  // Initialize low-level GX2 register access.
   //
-  _memoryMap = provider->mapDeviceMemoryWithIndex(0);
-  if (_memoryMap == NULL) {
-    WIISYSLOG("Failed to map graphics controller memory");
+  _gx2 = new WiiGX2;
+  if ((_gx2 == NULL) || !_gx2->init(provider)) {
+    WIISYSLOG("Failed to initialize GX2 register access");
+    OSSafeReleaseNULL(_gx2);
     return false;
   }
-  _baseAddr = (volatile void *)_memoryMap->getVirtualAddress();
-  WIIDBGLOG("Mapped registers to %p (physical 0x%X), length: 0x%X", _baseAddr,
-    _memoryMap->getPhysicalAddress(), _memoryMap->getLength());
+  _gx2->logHardwareState();
 
+  //
+  // Initialize the GPU command processor and default state.
+  // If the CP fails to start (e.g. microcode not loaded by boot firmware),
+  // we continue in display-only mode — the framebuffer still works.
+  //
+  if (_gx2->startCP()) {
+    WIISYSLOG("GPU command processor started");
+    if (_gx2->initGPUDefaultState()) {
+      WIISYSLOG("GPU default state initialized");
+    } else {
+      WIISYSLOG("Failed to initialize GPU default state");
+    }
+
+    if (_gx2->setupInterruptRing(false)) {
+      WIIDBGLOG("GPU IH ring staged (interrupt delivery masked)");
+
+      //
+      // Try to hook the Latte GPU7_GC vector (IRQ2 bit 11) so the IH ring
+      // is drained on live interrupts. We reach the controller via a
+      // platform-expert lookup + callPlatformFunction so WiiGraphics does
+      // not need to link against WiiPlatform.
+      //
+      OSDictionary *match = IOService::serviceMatching(kWiiCafeLatteControllerClass);
+      if (match != NULL) {
+        mach_timespec_t waitTime;
+        waitTime.tv_sec = 5;
+        waitTime.tv_nsec = 0;
+        IOService *controller = IOService::waitForService(match, &waitTime);
+        match->release();
+        if (controller != NULL) {
+          const OSSymbol *sym = OSSymbol::withCString(kWiiCafeFunctionRegisterDirectIRQ);
+          if (sym != NULL) {
+            IOReturn regRet = controller->callPlatformFunction(sym, false,
+              (void *)(uintptr_t) kWiiCafeGPU7VectorNumber,
+              this,
+              (void *) &WiiCafeFB::ihTrampoline,
+              this);
+            sym->release();
+            if (regRet == kIOReturnSuccess) {
+              _latteInterruptController = controller; // retained by wait
+              _ihHandlerRegistered = true;
+              _gx2->setInterruptRingEnabled(true);
+              WIIDBGLOG("GPU7_GC IH hook installed on vector %d", kWiiCafeGPU7VectorNumber);
+            } else {
+              WIISYSLOG("Failed to register GPU7_GC handler (0x%08X)", regRet);
+              controller->release();
+            }
+          } else {
+            controller->release();
+          }
+        } else {
+          WIIDBGLOG("LatteInterruptController not found; IH remains polled");
+        }
+      }
+    } else {
+      WIISYSLOG("Failed to stage GPU IH ring");
+    }
+
+    //
+    // Bring up the async DMA engine ring. Non-fatal — failure simply means
+    // we cannot issue DMA copies yet, display/CP still work.
+    //
+    if (_gx2->setupDMARing()) {
+      WIIDBGLOG("Async DMA engine ring initialized");
+    } else {
+      WIIDBGLOG("Async DMA engine ring unavailable");
+    }
+
+    //
+    // Map the MEM1 (EDRAM) aperture as a bump heap. Used for render-target
+    // placement once Phase 3 lands. Non-fatal — if the mapping is refused
+    // we silently fall back to MEM2 for everything.
+    //
+    if (_gx2->setupMEM1Heap()) {
+      WIIDBGLOG("MEM1 heap ready (%u bytes)", _gx2->getMEM1Size());
+    } else {
+      WIIDBGLOG("MEM1 heap unavailable");
+    }
+
+    //
+    // Phase 3: stage the clear pipeline (VS+PS bytecode, VB + fence
+    // pages). Non-fatal: if staging fails we simply never attempt the
+    // GPU clear smoke test.
+    //
+    if (_gx2->setupClearPipeline()) {
+      WIIDBGLOG("Clear pipeline ready");
+      //
+      // Fire a single full-framebuffer black clear as the Phase 3
+      // functional gate. Any failure logs SYSLOG but does not block
+      // display-path start — the software rasteriser still works. We
+      // deliberately clear to a recognisable pattern (dark grey) so an
+      // actual GPU write is visible on scanout if it lands.
+      //
+      IODeviceMemory *fbMem = provider->getDeviceMemoryWithIndex(1);
+      if (fbMem != NULL) {
+        IOPhysicalAddress fbPhys = fbMem->getPhysicalAddress();
+        const float clearColour[4] = { 0.05f, 0.05f, 0.10f, 1.0f };
+        if (_gx2->submitColorClear(fbPhys, 1280, 720, 1 /* BGRA */,
+                                   clearColour)) {
+          WIIDBGLOG("Phase 3 GPU clear smoke test passed (fb phys=0x%08X)",
+            (UInt32) fbPhys);
+        } else {
+          WIISYSLOG("Phase 3 GPU clear smoke test FAILED (fb phys=0x%08X)",
+            (UInt32) fbPhys);
+        }
+      } else {
+        WIIDBGLOG("Phase 3 clear skipped: no framebuffer memory");
+      }
+    } else {
+      WIIDBGLOG("Clear pipeline staging failed");
+    }
+
+    //
+    // Phase 4: stage the shared user fence page used by WiiGX2UserClient
+    // submissions. Non-fatal — if allocation fails the user client will
+    // be refused at open time but the framebuffer path keeps working.
+    //
+    if (_gx2->setupUserFence()) {
+      WIIDBGLOG("User IB fence page ready (phys=0x%08X)",
+        (UInt32) _gx2->getUserFencePhys());
+    } else {
+      WIIDBGLOG("User IB fence page unavailable (user client disabled)");
+    }
+  } else {
+    WIISYSLOG("GPU command processor failed to start (display-only mode)");
+  }
   //
   // Get the framebuffer memory.
   //
@@ -68,11 +232,11 @@ bool WiiCafeFB::start(IOService *provider) {
   }
 
   if (!super::start(provider)) {
-    WIIDBGLOG("super::start() returned false");
+    WIISYSLOG("super::start() returned false");
     return false;
   }
 
-  WIIDBGLOG("Initialized Cafe framebuffer");
+  WIISYSLOG("Initialized Cafe framebuffer");
   return true;
 }
 
@@ -81,6 +245,41 @@ bool WiiCafeFB::start(IOService *provider) {
 //
 IOReturn WiiCafeFB::enableController(void) {
   return super::enableController();
+}
+
+//
+// Static trampoline invoked by LatteInterruptController on every GPU7_GC
+// assertion. The Latte ISR calls us with vector locks held and interrupts
+// disabled; we must keep this path short. `consumeIHRing()` drains the
+// shared-memory IH ring and advances IH_RB_RPTR — no allocation, no
+// blocking, no callouts outside of MMIO access.
+//
+void WiiCafeFB::ihTrampoline(void *target, void * /*refCon*/,
+                             IOService * /*nub*/, int /*source*/) {
+  WiiCafeFB *self = (WiiCafeFB *) target;
+  if (self != NULL) {
+    self->serviceIHRing();
+  }
+}
+
+//
+// Drain up to a bounded number of IH entries per interrupt. The Latte
+// controller is level-triggered and will re-assert if the GPU keeps pushing
+// entries, so we intentionally cap the drain count to keep ISR latency
+// bounded. Future phases will dispatch specific source IDs (CP_EOP,
+// SCRATCH, DMA_TRAP) to workloop-side consumers.
+//
+void WiiCafeFB::serviceIHRing(void) {
+  enum { kIHBurst = 16 };
+  WiiGX2::InterruptEntry entries[kIHBurst];
+  UInt32 consumed;
+
+  if (_gx2 == NULL) {
+    return;
+  }
+
+  consumed = _gx2->consumeIHRing(entries, kIHBurst);
+  (void) consumed;
 }
 
 //
@@ -549,4 +748,56 @@ void WiiCafeFB::loadHardwareLUT(void) {
   // Use LUT A for the primary graphics.
   //
   writeReg32(kWiiGX2RegD1GrphLutSelect, 0);
+}
+
+//
+// Phase 4: IOUserClient factory.
+//
+// Invoked by the IOKit framework when a user process calls IOServiceOpen
+// on the WiiCafeFB service.
+//
+// Type 0 and any other non-GX2 type must be delegated to IOFramebuffer's
+// built-in user-client factory so WindowServer can start in plain
+// framebuffer mode even if the GPU command processor is unavailable.
+// Only our explicit kWiiGX2UCType opens should create WiiGX2UserClient.
+//
+IOReturn WiiCafeFB::newUserClient(task_t owningTask, void *securityID,
+                                  UInt32 type, IOUserClient **handler) {
+  WiiGX2UserClient *client;
+
+  if (handler == NULL) {
+    return kIOReturnBadArgument;
+  }
+  *handler = NULL;
+
+  if (type != kWiiGX2UCType) {
+    WIIDBGLOG("newUserClient: delegating type 0x%08X to IOFramebuffer", type);
+    return super::newUserClient(owningTask, securityID, type, handler);
+  }
+
+  if (_gx2 == NULL || !_gx2->isCPRunning()) {
+    WIISYSLOG("newUserClient: GX2 user client requested but GPU not ready");
+    return kIOReturnNotReady;
+  }
+
+  client = new WiiGX2UserClient;
+  if (client == NULL) {
+    return kIOReturnNoMemory;
+  }
+  if (!client->initWithTask(owningTask, securityID, type)) {
+    client->release();
+    return kIOReturnInternalError;
+  }
+  if (!client->attach(this)) {
+    client->release();
+    return kIOReturnInternalError;
+  }
+  if (!client->start(this)) {
+    client->detach(this);
+    client->release();
+    return kIOReturnInternalError;
+  }
+
+  *handler = client;
+  return kIOReturnSuccess;
 }

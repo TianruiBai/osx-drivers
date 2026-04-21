@@ -7,6 +7,42 @@
 
 #include "WiiOHCI.hpp"
 
+#define kWiiOHCILatteControlPrimeRetries   100
+#define kWiiOHCILatteControlPrimeDelayUS   1
+
+void WiiOHCI::primeControlListForLatte(void) {
+  UInt32 controlHeadPhysAddr;
+  UInt32 control;
+  UInt32 controlCurrent;
+
+  if (!checkPlatformCafe() || (_controlQuirkEndpointPtr == NULL)) {
+    return;
+  }
+
+  controlHeadPhysAddr = readReg32(kOHCIRegControlHeadED);
+  if (controlHeadPhysAddr == 0) {
+    return;
+  }
+
+  control = readReg32(kOHCIRegControl);
+
+  writeReg32(kOHCIRegControlHeadED, _controlQuirkEndpointPtr->physAddr);
+  writeReg32(kOHCIRegControl, control | kOHCIRegControlControlListEnable);
+  writeReg32(kOHCIRegCmdStatus, kOHCIRegCmdStatusControlListFilled);
+  OSSynchronizeIO();
+
+  controlCurrent = readReg32(kOHCIRegControlCurrentED);
+  for (UInt32 retries = kWiiOHCILatteControlPrimeRetries;
+      (retries != 0) && (controlCurrent == 0); retries--) {
+    IODelay(kWiiOHCILatteControlPrimeDelayUS);
+    controlCurrent = readReg32(kOHCIRegControlCurrentED);
+  }
+
+  writeReg32(kOHCIRegControl, control);
+  writeReg32(kOHCIRegControlHeadED, controlHeadPhysAddr);
+  OSSynchronizeIO();
+}
+
 //
 // Submits a general transfer to be executed by the OHCI controller.
 //
@@ -14,18 +50,49 @@
 //
 IOReturn WiiOHCI::doGeneralTransfer(OHCIEndpointData *endpoint, IOUSBCompletion completion,
                                     IOMemoryDescriptor *buffer, UInt32 bufferSize, UInt32 flags, UInt32 cmdBits) {
+  OHCIBounceBuffer  *bounceBuffer;
   OHCITransferData  *genTransferCurr;
   OHCITransferData  *genTransferTail;
+  IOMemoryDescriptor *srcBuffer;
+  UInt32            endpointFlags;
+  UInt32            endpointNumber;
+  UInt32            headTDPhysAddr;
+  bool              isDefaultControlEndpoint;
   UInt32            bufferRemaining;
   UInt32            transferSize;
   UInt32            offset;
 
+  endpointFlags = USBToHostLong(endpoint->ed->flags);
+  endpointNumber = (endpointFlags & kOHCIEDFlagsEndpointMask) >> kOHCIEDFlagsEndpointShift;
+  isDefaultControlEndpoint = !endpoint->isochronous
+    && (endpointNumber == 0)
+    && ((endpointFlags & kOHCIEDFlagsDirectionMask) == kOHCIEDFlagsDirectionTD);
+
   //
   // Ensure the endpoint is not halted.
   //
-  if (USBToHostLong(endpoint->ed->headTDPhysAddr) & kOHCIEDTDHeadHalted) {
-    WIISYSLOG("Pipe is stalled (EP Flags: 0x%X)", USBToHostLong(endpoint->ed->flags));
-    return kIOUSBPipeStalled;
+  headTDPhysAddr = USBToHostLong(endpoint->ed->headTDPhysAddr);
+  if (headTDPhysAddr & kOHCIEDTDHeadHalted) {
+    //
+    // A failed setup/data phase on the default control pipe must not leave
+    // endpoint 0 permanently poisoned. If the queue is empty and the halted
+    // ED belongs to endpoint 0, clear the residual halt/carry state and let
+    // the next control request recover the device.
+    //
+    if (isDefaultControlEndpoint
+        && ((headTDPhysAddr & kOHCIEDTDHeadMask) == endpoint->transferTail->physAddr)) {
+      WIISYSLOG("Recovering halted control pipe (EP Flags: 0x%X, head: 0x%X, tail: 0x%X)",
+        endpointFlags, headTDPhysAddr, endpoint->transferTail->physAddr);
+      endpoint->ed->headTDPhysAddr = HostToUSBLong(endpoint->transferTail->physAddr);
+      OSSynchronizeIO();
+    } else {
+      WIISYSLOG("Pipe is stalled (EP Flags: 0x%X)", endpointFlags);
+      return kIOUSBPipeStalled;
+    }
+  }
+
+  if ((cmdBits == kOHCIRegCmdStatusControlListFilled) && isDefaultControlEndpoint) {
+    primeControlListForLatte();
   }
 
   flags &= ~(kOHCIGenTDFlagsConditionCodeMask);
@@ -50,16 +117,23 @@ IOReturn WiiOHCI::doGeneralTransfer(OHCIEndpointData *endpoint, IOUSBCompletion 
       //
       // Get a bounce buffer.
       //
-      genTransferCurr->bounceBuffer = getFreeBounceBuffer(bufferRemaining > kWiiOHCIBounceBufferSize);
+      bounceBuffer = getFreeBounceBuffer(bufferRemaining > kWiiOHCIBounceBufferSize);
+      if (bounceBuffer == NULL) {
+        WIISYSLOG("Failed to get bounce buffer");
+        returnTransfer(genTransferTail);
+        return kIOReturnNoMemory;
+      }
 
-      if (genTransferCurr->bounceBuffer->jumbo) {
+      if (bounceBuffer->jumbo) {
         transferSize = (bufferRemaining > kWiiOHCIBounceBufferJumboSize) ? kWiiOHCIBounceBufferJumboSize : bufferRemaining;
       } else {
         transferSize = (bufferRemaining > kWiiOHCIBounceBufferSize) ? kWiiOHCIBounceBufferSize : bufferRemaining;
       }
-      genTransferCurr->srcBuffer = IOMemoryDescriptor::withSubRange(buffer, offset, transferSize, buffer->getDirection());
-      if (genTransferCurr->srcBuffer == NULL) {
+      srcBuffer = IOMemoryDescriptor::withSubRange(buffer, offset, transferSize, buffer->getDirection());
+      if (srcBuffer == NULL) {
         WIISYSLOG("Failed to get sub memory descriptor");
+        returnBounceBuffer(bounceBuffer);
+        returnTransfer(genTransferTail);
         return kIOReturnDMAError;
       }
 
@@ -68,13 +142,19 @@ IOReturn WiiOHCI::doGeneralTransfer(OHCIEndpointData *endpoint, IOUSBCompletion 
       // This is located in MEM2, MEM1 buffers can work but seem to have issues with non-aligned buffers
       // and buffers not a multiple of 4 on Wii.
       //
-      if (genTransferCurr->srcBuffer->getDirection() & kIODirectionOut) {
-        if (genTransferCurr->srcBuffer->readBytes(0, genTransferCurr->bounceBuffer->buf, transferSize) != transferSize) {
+      if (srcBuffer->getDirection() & kIODirectionOut) {
+        if (srcBuffer->readBytes(0, bounceBuffer->buf, transferSize) != transferSize) {
           WIISYSLOG("Failed to copy all bytes into bounce buffer");
+          OSSafeReleaseNULL(srcBuffer);
+          returnBounceBuffer(bounceBuffer);
+          returnTransfer(genTransferTail);
           return kIOReturnDMAError;
         }
-        flushDataCache(genTransferCurr->bounceBuffer->buf, transferSize);
+        flushDataCache(bounceBuffer->buf, transferSize);
       }
+
+      genTransferCurr->bounceBuffer = bounceBuffer;
+      genTransferCurr->srcBuffer    = srcBuffer;
 
       offset          += transferSize;
       bufferRemaining -= transferSize;
@@ -141,8 +221,11 @@ IOReturn WiiOHCI::doGeneralTransfer(OHCIEndpointData *endpoint, IOUSBCompletion 
 //
 IOReturn WiiOHCI::prepareIsochTransfer(OHCITransferData *transfer, IOMemoryDescriptor *buffer, UInt32 offset, UInt32 transferSize,
                                        UInt16 numPackets, UInt32 flags) {
+  OHCIBounceBuffer  *bounceBuffer;
   UInt32 bufferPage;
   UInt16 packetOffset;
+  IOMemoryDescriptor *srcBuffer;
+  IOReturn status;
 
   WIIDBGLOG("TD phys: 0x%X, offset: 0x%X, size: 0x%X, fs: %u, fc: %u", transfer->physAddr,
     offset, transferSize, flags & kOHCIIsoTDFlagsStartingFrameMask, numPackets);
@@ -151,17 +234,26 @@ IOReturn WiiOHCI::prepareIsochTransfer(OHCITransferData *transfer, IOMemoryDescr
   // Create bounce buffer and grab the source buffer.
   // Data will be copied in later just before the frame is sent.
   //
-  transfer->bounceBuffer = getFreeBounceBuffer(transferSize > kWiiOHCIBounceBufferSize);
-  if (transfer->bounceBuffer == NULL) {
+  bounceBuffer = getFreeBounceBuffer(transferSize > kWiiOHCIBounceBufferSize);
+  if (bounceBuffer == NULL) {
     WIISYSLOG("Failed to get a bounce buffer");
     return kIOReturnDMAError;
   }
-  transfer->srcBuffer = IOMemoryDescriptor::withSubRange(buffer, offset, transferSize, buffer->getDirection());
-  if (transfer->srcBuffer == NULL) {
+  srcBuffer = IOMemoryDescriptor::withSubRange(buffer, offset, transferSize, buffer->getDirection());
+  if (srcBuffer == NULL) {
     WIISYSLOG("Failed to get sub memory descriptor");
+    returnBounceBuffer(bounceBuffer);
     return kIOReturnDMAError;
   }
-  transfer->srcBuffer->prepare();
+  status = srcBuffer->prepare();
+  if (status != kIOReturnSuccess) {
+    OSSafeReleaseNULL(srcBuffer);
+    returnBounceBuffer(bounceBuffer);
+    return status;
+  }
+
+  transfer->bounceBuffer = bounceBuffer;
+  transfer->srcBuffer = srcBuffer;
 
   transfer->isoBufferCopied  = false;
   transfer->actualBufferSize = transferSize;
@@ -401,13 +493,22 @@ IOReturn WiiOHCI::doIsochTransfer(short functionAddress, short endpointNumber, I
 //
 // This function is gated and called within the workloop context.
 //
-void WiiOHCI::completeGeneralTransfer(OHCITransferData *transfer) {
+bool WiiOHCI::completeGeneralTransfer(OHCITransferData *transfer) {
   UInt32    transferStatus;
   UInt32    bufferSizeRemaining;
+  UInt32    endpointFlags;
+  UInt32    endpointNumber;
+  UInt32    headTDPhysAddr;
+  bool      isDefaultControlEndpoint;
   IOReturn  tdStatus;
 
   transferStatus = (USBToHostLong(transfer->genTD->flags) & kOHCIGenTDFlagsConditionCodeMask) >> kOHCIGenTDFlagsConditionCodeShift;
   tdStatus = convertTDStatus(transferStatus);
+  endpointFlags = USBToHostLong(transfer->endpoint->ed->flags);
+  endpointNumber = (endpointFlags & kOHCIEDFlagsEndpointMask) >> kOHCIEDFlagsEndpointShift;
+  isDefaultControlEndpoint = !transfer->endpoint->isochronous
+    && (endpointNumber == 0)
+    && ((endpointFlags & kOHCIEDFlagsDirectionMask) == kOHCIEDFlagsDirectionTD);
   WIIDBGLOG("GenTD phys 0x%X, next 0x%X, stat: 0x%X, 0x%X", transfer->physAddr, USBToHostLong(transfer->genTD->nextTDPhysAddr), transferStatus, tdStatus);
 
   bufferSizeRemaining = getGenTransferBufferRemaining(transfer);
@@ -434,6 +535,32 @@ void WiiOHCI::completeGeneralTransfer(OHCITransferData *transfer) {
 
   if (tdStatus != kIOReturnSuccess) {
     WIISYSLOG("Got an error here: 0x%X", tdStatus);
+
+    if (transfer->last) {
+      headTDPhysAddr = USBToHostLong(transfer->endpoint->ed->headTDPhysAddr) & kOHCIEDTDHeadMask;
+
+      if (headTDPhysAddr != transfer->endpoint->transferTail->physAddr) {
+        WIIDBGLOG("Aborting queued transfers behind failed request");
+        removeEndpointTransfers(transfer->endpoint);
+        if ((tdStatus == kIOUSBPipeStalled) && !isDefaultControlEndpoint) {
+          transfer->endpoint->ed->headTDPhysAddr |= HostToUSBLong(kOHCIEDTDHeadHalted);
+        }
+      } else if ((tdStatus != kIOUSBPipeStalled) || isDefaultControlEndpoint) {
+        transfer->endpoint->ed->headTDPhysAddr = HostToUSBLong(transfer->endpoint->transferTail->physAddr);
+      }
+
+      if (tdStatus == kIOReturnUnderrun) {
+        tdStatus = kIOReturnSuccess;
+      }
+
+      WIIDBGLOG("Calling completion");
+      Complete(transfer->genCompletion, tdStatus, bufferSizeRemaining);
+      return false;
+    }
+
+    WIIDBGLOG("Completing failed endpoint queue");
+    completeFailedEndpointGenTransfers(transfer->endpoint, tdStatus, bufferSizeRemaining);
+    return true;
   }
 
   //
@@ -444,15 +571,9 @@ void WiiOHCI::completeGeneralTransfer(OHCITransferData *transfer) {
     Complete(transfer->genCompletion, tdStatus, bufferSizeRemaining);
   } else {
     WIIDBGLOG("No completion");
-
-    //
-    // If there was an error, need to finish the rest of the chain.
-    //
-    if (tdStatus != kIOReturnSuccess) {
-      WIIDBGLOG("Completing short packet");
-      completeFailedEndpointGenTransfers(transfer->endpoint, tdStatus, bufferSizeRemaining);
-    }
   }
+
+  return false;
 }
 
 //
@@ -609,7 +730,6 @@ void WiiOHCI::completeIsochTransfer(OHCITransferData *transfer, IOReturn status)
 // This function is gated and called within the workloop context.
 //
 void WiiOHCI::completeTransferQueue(OHCITransferData *headTransfer) {
-  OHCITransferData  *prevTransfer;
   OHCITransferData  *currTransfer;
   OHCITransferData  *nextTransfer;
   UInt8             hcStatus;
@@ -627,14 +747,19 @@ void WiiOHCI::completeTransferQueue(OHCITransferData *headTransfer) {
   //
   currTransfer = headTransfer;
   while (currTransfer != NULL) {
+    nextTransfer = currTransfer->nextTransfer;
+
     if ((currTransfer->type == kOHCITransferTypeIsochronous) || (currTransfer->type == kOHCITransferTypeIsochronousLowLatency)) {
       hcStatus = (USBToHostLong(currTransfer->isoTD->flags) & kOHCIIsoTDFlagsConditionCodeMask) >> kOHCIIsoTDFlagsConditionCodeShift;
       completeIsochTransfer(currTransfer, convertTDStatus(hcStatus));
     } else {
-      completeGeneralTransfer(currTransfer);
+      // The error path can already unlink and recycle the endpoint chain.
+      if (completeGeneralTransfer(currTransfer)) {
+        currTransfer = nextTransfer;
+        continue;
+      }
     }
-    
-    nextTransfer = currTransfer->nextTransfer;
+
     returnTransfer(currTransfer);
     currTransfer = nextTransfer;
   }
@@ -1184,11 +1309,13 @@ IOReturn WiiOHCI::UIMClearEndpointStall(short functionNumber, short endpointNumb
 }
 
 void WiiOHCI::UIMRootHubStatusChange(void) {
-WIIDBGLOG("start");
+  WIIDBGLOG("Processing root hub status change");
+  completeRootHubInterruptTransfer(false);
 }
 
 void WiiOHCI::UIMRootHubStatusChange(bool abort) {
-WIIDBGLOG("start");
+  WIIDBGLOG("Processing root hub status change, abort: %u", abort ? 1 : 0);
+  completeRootHubInterruptTransfer(abort);
 }
 
 #if __MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_1

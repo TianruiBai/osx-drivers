@@ -12,6 +12,7 @@
 #include <IOKit/IOCommandGate.h>
 #include <IOKit/IOMemoryCursor.h>
 #include <IOKit/IOInterruptEventSource.h>
+#include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOService.h>
 
 #include "WiiCommon.hpp"
@@ -36,12 +37,14 @@ private:
   IOWorkLoop                *_workLoop;
   IOCommandGate             *_commandGate;
   IOInterruptEventSource    *_interruptEventSource;
+  IOTimerEventSource        *_commandTimerSource;
   IONaturalMemoryCursor     *_memoryCursor;
   IOBufferMemoryDescriptor  *_doubleBuffer;
   UInt8                     *_doubleBufferPtr;
   IOPhysicalSegment         _doubleBufferSegment;
   queue_head_t              _commandQueue;
 	WiiSDCommand              *_currentCommand;
+  UInt32                    _commandTimeoutRemainingUS;
 
   // _invalidate_dcache pointer. This function is not exported on 10.4
   WiiInvalidateDataCacheFunc  _invalidateCacheFunc;
@@ -58,6 +61,7 @@ private:
   // Card states.
   //
   bool            _isCardPresent;
+  bool            _isCardInitialized;
   // Card selected.
   UInt16          _cardAddress;
   bool            _isCardSelected;
@@ -118,6 +122,8 @@ private:
   }
 
   void handleInterrupt(IOInterruptEventSource *intEventSource, int count);
+  void commandWatchdogFired(IOTimerEventSource *timerSource);
+  void serviceInterruptStatus(UInt32 rawIntStatus);
   void handleAsyncReadWriteCompletion(WiiSDCommand *command);
 
   //
@@ -137,7 +143,7 @@ private:
   IOReturn executeCommand(WiiSDCommand *command);
   IOReturn executeCommandGated(WiiSDCommand *command);
   void dispatchNext(void);
-  void doAsyncIO(UInt32 intStatus = 0);
+  void doAsyncIO(UInt16 normalIntStatus = 0, UInt16 errorIntStatus = 0);
   IOReturn prepareDataTx(void);
   void completeIO(IOReturn status);
 

@@ -10,6 +10,21 @@
 
 #include <IOKit/IOLib.h>
 
+#ifndef OSSafeReleaseNULL
+#define OSSafeReleaseNULL(obj) do { \
+  if ((obj) != NULL) { \
+    (obj)->release(); \
+    (obj) = NULL; \
+  } \
+} while (0)
+#endif
+
+#if defined(WII_TIGER_IOINTERRUPT_API)
+#define WiiIOInterruptVectorNumber long
+#else
+#define WiiIOInterruptVectorNumber IOInterruptVectorNumber
+#endif
+
 #define ARRSIZE(x)    ((sizeof (x) / sizeof ((x)[0])))
 
 #define kHz   1000
@@ -65,6 +80,8 @@
 #define kWiiFuncPlatformGetMem2Allocator    "PlatformGetMem2Allocator"
 #define kWiiFuncIPCGetRTCBias               "IPCGetRTCBias"
 #define kWiiFuncIPCCafeLog                  "IPCCafeLog"
+#define kWiiFuncIPCRvlStartFB               "IPCRvlStartFB"
+#define kWiiFuncIPCRvlStopFB                "IPCRvlStopFB"
 
 //
 // Major kernel version exported from XNU.

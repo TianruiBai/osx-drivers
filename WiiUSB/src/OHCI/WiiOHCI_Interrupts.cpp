@@ -7,6 +7,97 @@
 
 #include "WiiOHCI.hpp"
 
+void WiiOHCI::queueDoneHeadTransfers(IOPhysicalAddress doneHeadPhysAddr, bool *signalSecondaryInt) {
+  OHCITransferData  *newDoneHeadTransfer;
+  OHCITransferData  *newIsoInHeadTransfer;
+  AbsoluteTime      timeStamp;
+  UInt16            frameCount;
+  UInt16            pktOffStatus;
+  OHCITransferData  *tailTransfer;
+  OHCITransferData  *tailIsoInTransfer;
+  OHCITransferData  *currTransfer;
+
+  if (doneHeadPhysAddr == 0) {
+    return;
+  }
+
+#if defined(WII_TIGER_SDK)
+  UInt64 timeStampValue;
+  clock_get_uptime(&timeStampValue);
+  timeStamp.hi = static_cast<UInt32>(timeStampValue >> 32);
+  timeStamp.lo = static_cast<UInt32>(timeStampValue & 0xFFFFFFFFULL);
+#else
+  clock_get_uptime(&timeStamp);
+#endif
+
+  newDoneHeadTransfer   = NULL;
+  newIsoInHeadTransfer  = NULL;
+  tailTransfer          = NULL;
+  tailIsoInTransfer     = NULL;
+  currTransfer          = getTransferFromPhys(doneHeadPhysAddr);
+  while (currTransfer != NULL) {
+    if (currTransfer->type == kOHCITransferTypeIsochronousLowLatency) {
+      frameCount = ((USBToHostLong(currTransfer->isoTD->flags) & kOHCIIsoTDFlagsFrameCountMask) >> kOHCIIsoTDFlagsFrameCountShift) + 1;
+      for (UInt16 i = 0; i < frameCount; i++) {
+        pktOffStatus = USBToHostWord(currTransfer->isoTD->packetOffsetStatus[i]);
+
+        currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frTimeStamp = timeStamp;
+        if (((pktOffStatus & kOHCIIsoTDPktOffsetConditionCodeMask) >> kOHCIIsoTDPktOffsetConditionCodeShift) == kOHCITDConditionCodeNotAccessedPSW) {
+          currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frStatus   = convertTDStatus(kOHCITDConditionCodeNotAccessed);
+          currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frActCount = 0;
+        } else {
+          currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frStatus = convertTDStatus((pktOffStatus & kOHCIIsoTDPktStatusConditionCodeMask) >> kOHCIIsoTDPktStatusConditionCodeShift);
+          if ((currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frStatus == kIOReturnSuccess) && (currTransfer->direction == kUSBOut)) {
+            currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frActCount = currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frReqCount;
+          } else {
+            currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frActCount = pktOffStatus & kOHCIIsoTDPktStatusSizeMask;
+          }
+        }
+      }
+    }
+
+    if (((currTransfer->type == kOHCITransferTypeIsochronous) || (currTransfer->type == kOHCITransferTypeIsochronousLowLatency)) && (currTransfer->direction == kUSBIn)) {
+      currTransfer->nextTransfer = newIsoInHeadTransfer;
+      newIsoInHeadTransfer       = currTransfer;
+
+      if (tailIsoInTransfer == NULL) {
+        tailIsoInTransfer = currTransfer;
+      }
+    } else {
+      currTransfer->nextTransfer = newDoneHeadTransfer;
+      newDoneHeadTransfer        = currTransfer;
+
+      if (tailTransfer == NULL) {
+        tailTransfer = currTransfer;
+      }
+    }
+
+    currTransfer = getTransferFromPhys(USBToHostLong(currTransfer->genTD->nextTDPhysAddr));
+  }
+
+  if (newDoneHeadTransfer != NULL) {
+    IOSimpleLockLock(_writeDoneHeadLock);
+
+    tailTransfer->nextTransfer = (OHCITransferData*) _writeDoneHeadPtr;
+    _writeDoneHeadPtr = newDoneHeadTransfer;
+    _intWriteDoneHead = true;
+
+    IOSimpleLockUnlock(_writeDoneHeadLock);
+
+    if (signalSecondaryInt != NULL) {
+      *signalSecondaryInt = true;
+    }
+  }
+
+  if (newIsoInHeadTransfer != NULL) {
+    IOSimpleLockLock(_isoInHeadLock);
+
+    tailIsoInTransfer->nextTransfer = (OHCITransferData*) _isoInHeadPtr;
+    _isoInHeadPtr = newIsoInHeadTransfer;
+
+    IOSimpleLockUnlock(_isoInHeadLock);
+  }
+}
 //
 // Interrupt handler filter function.
 //
@@ -16,17 +107,8 @@
 bool WiiOHCI::filterInterrupt(IOFilterInterruptEventSource *filterIntEventSource) {
   UInt32            intEnable;
   UInt32            intStatus;
-  OHCITransferData  *newDoneHeadTransfer;
-  OHCITransferData  *newIsoInHeadTransfer;
 
   IOPhysicalAddress newWriteDoneHeadPhysAddr;
-  AbsoluteTime      timeStamp;
-  UInt16            frameCount;
-  UInt16            pktOffStatus;
-  UInt16            hcFrameNumber;
-  OHCITransferData  *tailTransfer;
-  OHCITransferData  *tailIsoInTransfer;
-  OHCITransferData  *currTransfer;
   bool              signalSecondaryInt;
 
   intEnable = readReg32(kOHCIRegIntEnable);
@@ -54,11 +136,10 @@ bool WiiOHCI::filterInterrupt(IOFilterInterruptEventSource *filterIntEventSource
   // Process the done queue.
   //
   if (intStatus & kOHCIRegIntStatusWritebackDoneHead) {
-    clock_get_uptime(&timeStamp);
-
-    //
-    // Get the queue head from HCCA and notify controller its been taken.
-    //
+    if (_invalidateCacheFunc != NULL) {
+      _invalidateCacheFunc((vm_offset_t) _hccaPtr, sizeof (*_hccaPtr), false);
+    }
+    OSSynchronizeIO();
     newWriteDoneHeadPhysAddr = USBToHostLong(_hccaPtr->doneHeadPhysAddr) & kOHCIRegDoneHeadMask;
     _hccaPtr->doneHeadPhysAddr = 0;
     writeReg32(kOHCIRegIntStatus, kOHCIRegIntStatusWritebackDoneHead);
@@ -68,81 +149,7 @@ bool WiiOHCI::filterInterrupt(IOFilterInterruptEventSource *filterIntEventSource
     // Reverse the queue and get the pointers to transfer data.
     // The host controller links the newest descriptors to the head of the queue.
     //
-    newDoneHeadTransfer   = NULL;
-    newIsoInHeadTransfer  = NULL;
-    tailTransfer          = NULL;
-    tailIsoInTransfer     = NULL;
-    currTransfer          = getTransferFromPhys(newWriteDoneHeadPhysAddr);
-    while (currTransfer != NULL) {
-      //
-      // Update timestamp and status for low latency isochronous transfers.
-      //
-      if (currTransfer->type == kOHCITransferTypeIsochronousLowLatency) {
-        frameCount = ((USBToHostLong(currTransfer->isoTD->flags) & kOHCIIsoTDFlagsFrameCountMask) >> kOHCIIsoTDFlagsFrameCountShift) + 1;
-        for (UInt16 i = 0; i < frameCount; i++) {
-          pktOffStatus = USBToHostWord(currTransfer->isoTD->packetOffsetStatus[i]);
-
-          currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frTimeStamp = timeStamp;
-          if (((pktOffStatus & kOHCIIsoTDPktOffsetConditionCodeMask) >> kOHCIIsoTDPktOffsetConditionCodeShift) == kOHCITDConditionCodeNotAccessedPSW) {
-            currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frStatus   = convertTDStatus(kOHCITDConditionCodeNotAccessed);
-            currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frActCount = 0;
-          } else {
-            currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frStatus = convertTDStatus((pktOffStatus & kOHCIIsoTDPktStatusConditionCodeMask) >> kOHCIIsoTDPktStatusConditionCodeShift);
-            if ((currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frStatus == kIOReturnSuccess) && (currTransfer->direction == kUSBOut)) {
-              currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frActCount = currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frReqCount;
-            } else {
-              currTransfer->isoLowFrames[currTransfer->isoFrameIndex + i].frActCount = pktOffStatus & kOHCIIsoTDPktStatusSizeMask;
-            }
-          }
-        }
-      }
-
-      //
-      // Link the transfer to the correct list.
-      // Inbound isochronous transfers go to a different linked list for post-transfer copies.
-      //
-      if (((currTransfer->type == kOHCITransferTypeIsochronous) || (currTransfer->type == kOHCITransferTypeIsochronousLowLatency)) && (currTransfer->direction == kUSBIn)) {
-        currTransfer->nextTransfer = newIsoInHeadTransfer;
-        newIsoInHeadTransfer       = currTransfer;
-
-        if (tailIsoInTransfer == NULL) {
-          tailIsoInTransfer = currTransfer;
-        }
-      } else {
-        currTransfer->nextTransfer = newDoneHeadTransfer;
-        newDoneHeadTransfer        = currTransfer;
-
-        if (tailTransfer == NULL) {
-          tailTransfer = currTransfer;
-        }
-      }
-
-      currTransfer = getTransferFromPhys(USBToHostLong(currTransfer->genTD->nextTDPhysAddr));
-    }
-
-    //
-    // Update the current unprocessed linked lists.
-    //
-    if (newDoneHeadTransfer != NULL) {
-      IOSimpleLockLock(_writeDoneHeadLock);
-
-      tailTransfer->nextTransfer = (OHCITransferData*) _writeDoneHeadPtr;
-      _writeDoneHeadPtr = newDoneHeadTransfer;
-
-      IOSimpleLockUnlock(_writeDoneHeadLock);
-
-      _intWriteDoneHead  = true;
-      signalSecondaryInt = true;
-    }
-
-    if (newIsoInHeadTransfer != NULL) {
-      IOSimpleLockLock(_isoInHeadLock);
-
-      tailIsoInTransfer->nextTransfer = (OHCITransferData*) _isoInHeadPtr;
-      _isoInHeadPtr = newIsoInHeadTransfer;
-
-      IOSimpleLockUnlock(_isoInHeadLock);
-    }
+    queueDoneHeadTransfers(newWriteDoneHeadPhysAddr, &signalSecondaryInt);
   }
 
   //
@@ -161,6 +168,7 @@ bool WiiOHCI::filterInterrupt(IOFilterInterruptEventSource *filterIntEventSource
   // Resume detected.
   //
   if (intStatus & kOHCIRegIntStatusResumeDetected) {
+
     writeReg32(kOHCIRegIntStatus, kOHCIRegIntStatusResumeDetected);
     OSSynchronizeIO();
 
@@ -232,35 +240,91 @@ bool WiiOHCI::filterInterrupt(IOFilterInterruptEventSource *filterIntEventSource
 //
 void WiiOHCI::handleInterrupt(IOInterruptEventSource *intEventSource, int count) {
   IOInterruptState  intState;
-  UInt32            newWriteHeadDoneProducerCount;
   volatile OHCITransferData  *newDoneTransfer;
+  bool rootHubStatusChanged;
+  bool writeDoneHeadPending;
 
-  WIIDBGLOG("Interrupt: WH: %u, RH: %u", _intWriteDoneHead, _intRootHubStatus);
+  (void) intEventSource;
+  (void) count;
+
+  newDoneTransfer = NULL;
+  writeDoneHeadPending = false;
+  rootHubStatusChanged = false;
+
+  intState = IOSimpleLockLockDisableInterrupt(_writeDoneHeadLock);
+  if (_intWriteDoneHead || (_writeDoneHeadPtr != NULL)) {
+    writeDoneHeadPending = true;
+    _intWriteDoneHead = false;
+    newDoneTransfer   = _writeDoneHeadPtr;
+    _writeDoneHeadPtr = NULL;
+  }
+  IOSimpleLockUnlockEnableInterrupt(_writeDoneHeadLock, intState);
+
+  intState = IOSimpleLockLockDisableInterrupt(_intRootHubStatusLock);
+  rootHubStatusChanged = _intRootHubStatus;
+  _intRootHubStatus = false;
+  IOSimpleLockUnlockEnableInterrupt(_intRootHubStatusLock, intState);
+
+  WIIDBGLOG("Interrupt: WH: %u, RH: %u", writeDoneHeadPending ? 1 : 0, rootHubStatusChanged ? 1 : 0);
 
   //
   // Done queue head written.
   //
-  if (_intWriteDoneHead) {
-    _intWriteDoneHead = false;
-
-    intState = IOSimpleLockLockDisableInterrupt(_writeDoneHeadLock);
-
-    newDoneTransfer   = _writeDoneHeadPtr;
-    _writeDoneHeadPtr = NULL;
-
-    IOSimpleLockUnlockEnableInterrupt(_writeDoneHeadLock, intState);
-
+  if (newDoneTransfer != NULL) {
     completeTransferQueue((OHCITransferData*) newDoneTransfer);
   }
 
   //
   // Root hub status change.
   //
-  if (_intRootHubStatus) {
-    intState = IOSimpleLockLockDisableInterrupt(_intRootHubStatusLock);
-    _intRootHubStatus = false;
-    IOSimpleLockUnlockEnableInterrupt(_intRootHubStatusLock, intState);
+  if (rootHubStatusChanged) {
+    UIMRootHubStatusChange();
+  }
+}
+
+void WiiOHCI::handleWatchdog(IOTimerEventSource *sender) {
+  IOPhysicalAddress doneHeadPhysAddr;
+  IOInterruptState intState;
+  UInt32 intStatus;
+  bool doneHeadPending;
+  bool signalSecondaryInt;
+  bool rootHubPending;
+
+  (void) sender;
+
+  if (_baseAddr == NULL) {
+    return;
+  }
+
+  signalSecondaryInt = false;
+  intStatus = readReg32(kOHCIRegIntStatus);
+  intState = IOSimpleLockLockDisableInterrupt(_writeDoneHeadLock);
+  doneHeadPending = _intWriteDoneHead || (_writeDoneHeadPtr != NULL);
+  IOSimpleLockUnlockEnableInterrupt(_writeDoneHeadLock, intState);
+  if (((intStatus & kOHCIRegIntStatusWritebackDoneHead) != 0) && !doneHeadPending) {
+    OSSynchronizeIO();
+    doneHeadPhysAddr = USBToHostLong(_hccaPtr->doneHeadPhysAddr) & kOHCIRegDoneHeadMask;
+    if (doneHeadPhysAddr != 0) {
+      _hccaPtr->doneHeadPhysAddr = 0;
+      OSSynchronizeIO();
+      writeReg32(kOHCIRegIntStatus, kOHCIRegIntStatusWritebackDoneHead);
+      OSSynchronizeIO();
+      queueDoneHeadTransfers(doneHeadPhysAddr, &signalSecondaryInt);
+    }
+  }
+
+  IOLockLock(_rootHubInterruptTransLock);
+  rootHubPending = (_rootHubInterruptTransactions[0].completion.action != NULL);
+  IOLockUnlock(_rootHubInterruptTransLock);
+  if (rootHubPending) {
     completeRootHubInterruptTransfer(false);
+  }
+
+  if (signalSecondaryInt && (_interruptEventSource != NULL)) {
+    _interruptEventSource->signalInterrupt();
+  }
+  if (_watchdogEventSource != NULL) {
+    _watchdogEventSource->setTimeoutUS(kWiiOHCIWatchdogRefreshUS);
   }
 }
 
@@ -309,13 +373,13 @@ void WiiOHCI::handleIsoInTimer(IOTimerEventSource *sender) {
 
     prevTransfer->nextTransfer = (OHCITransferData*) _writeDoneHeadPtr;
     _writeDoneHeadPtr          = (OHCITransferData*)  headIsoInTransfer;
+    _intWriteDoneHead          = true;
 
     IOSimpleLockUnlockEnableInterrupt(_writeDoneHeadLock, intState);
 
     //
     // Signal the main handler there are new completed transfers.
     //
-    _intWriteDoneHead = true;
     _interruptEventSource->signalInterrupt();
   }
 
@@ -376,5 +440,6 @@ void WiiOHCI::handleIsoOutTimer(IOTimerEventSource *sender) {
 // Overrides IOUSBController::PollInterrupts().
 //
 void WiiOHCI::PollInterrupts(IOUSBCompletionAction safeAction) {
-  WIIDBGLOG("start");
+  (void) safeAction;
+  handleWatchdog(NULL);
 }

@@ -331,51 +331,67 @@ IOReturn WiiSDHC::initCard(void) {
   // Check if card is present.
   //
   if (!isCardPresent()) {
-    WIIDBGLOG("No card is currently inserted");
+    WIISYSLOG("initCard: no card currently inserted (ps=0x%X)", readReg32(kSDHCRegPresentState));
     _isCardPresent = false;
     return kIOReturnNoMedia;
   }
   _isCardPresent = false; // TODO
+  WIISYSLOG("initCard: card present, bringing up at 400 kHz");
 
   //
   // Reset to initialization clock and power on the card.
   //
   status = setControllerClock(kSDHCInitSpeedClock400kHz);
   if (status != kIOReturnSuccess) {
+    WIISYSLOG("initCard: setControllerClock(400kHz) failed: 0x%X", status);
     return status;
   }
+  WIISYSLOG("initCard: 400kHz clock stable, applying card power");
   setControllerPower(true);
+  WIISYSLOG("initCard: power applied, hostctl=0x%X power=0x%X clock=0x%X ps=0x%X",
+    readReg8(kSDHCRegHostControl1), readReg8(kSDHCRegPowerControl),
+    readReg16(kSDHCRegClockControl), readReg32(kSDHCRegPresentState));
 
+  WIISYSLOG("initCard: issuing resetCard (CMD0 / GO_IDLE)");
   status = resetCard();
   if (status != kIOReturnSuccess) {
+    WIISYSLOG("initCard: resetCard failed: 0x%X", status);
     return status;
   }
+  WIISYSLOG("initCard: resetCard OK, reading CSD");
 
   status = readCardCSD();
   if (status != kIOReturnSuccess) {
+    WIISYSLOG("initCard: readCardCSD failed: 0x%X", status);
     return status;
   }
+  WIISYSLOG("initCard: CSD OK, switching to 25 MHz");
 
   status = setControllerClock(kSDHCNormalSpeedClock25MHz);
   if (status != kIOReturnSuccess) {
+    WIISYSLOG("initCard: setControllerClock(25MHz) failed: 0x%X", status);
     return status;
   }
 
   status = selectDeselectCard(true);
   if (status != kIOReturnSuccess) {
+    WIISYSLOG("initCard: selectDeselectCard failed: 0x%X", status);
     return status;
   }
 
   status = setCardBusWidth(kSDBusWidth4);
   if (status != kIOReturnSuccess) {
+    WIISYSLOG("initCard: setCardBusWidth(4) failed: 0x%X", status);
     return status;
   }
 
   status = setCardBlockLength(kSDBlockSize);
   if (status != kIOReturnSuccess) {
+    WIISYSLOG("initCard: setCardBlockLength failed: 0x%X", status);
     return status;
   }
 
+  WIISYSLOG("initCard: bus width set, block length set");
   IOSleep(1000); // TODO: even needed?
   return kIOReturnSuccess;
 }

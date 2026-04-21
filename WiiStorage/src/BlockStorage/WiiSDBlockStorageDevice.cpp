@@ -26,8 +26,6 @@ bool WiiSDBlockStorageDevice::init(OSDictionary *dictionary) {
 // Overrides IOBlockStorageDevice::start()
 //
 bool WiiSDBlockStorageDevice::start(IOService *provider) {
-  IOReturn      status;
-
   _wiiSDHC = OSDynamicCast(WiiSDHC, provider);
   if (_wiiSDHC == NULL) {
     WIISYSLOG("Provider is not WiiSDHC");
@@ -62,7 +60,7 @@ bool WiiSDBlockStorageDevice::start(IOService *provider) {
 
   registerService();
 
-  WIIDBGLOG("Initialized Wii SD block storage");
+  WIISYSLOG("Initialized Wii SD block storage");
   return true;
 }
 

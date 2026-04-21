@@ -7,6 +7,14 @@
 
 #include "WiiOHCI.hpp"
 
+#ifndef kAppleVendorID
+#define kAppleVendorID 0x05AC
+#endif
+
+#ifndef kPrdRootHubApple
+#define kPrdRootHubApple 0x8005
+#endif
+
 #define kWiiRootHubProductStringIndex   1
 #define kWiiRootHubVendorStringIndex    2
 
@@ -494,11 +502,12 @@ void WiiOHCI::simulateRootHubInterruptTransfer(short endpointNumber, IOUSBComple
       IOLockUnlock(_rootHubInterruptTransLock);
 
       //
-      // Enable the root hub status change interrupt.
-      // These interrupt transfers will get completed when that arrives.
+      // Let the shared root hub change path either complete this
+      // immediately if change bits are already latched, or re-arm
+      // RHSC for the next change.
       //
       WIIDBGLOG("Queuing root hub change interrupt transfer");
-      writeReg32(kOHCIRegIntEnable, readReg32(kOHCIRegIntEnable) | kOHCIRegIntEnableRootHubStatusChange);
+      UIMRootHubStatusChange();
       return;
     }
   }
@@ -517,10 +526,13 @@ void WiiOHCI::completeRootHubInterruptTransfer(bool abort) {
   struct WiiOHCIRootHubIntTransaction lastTransaction;
   IOUSBHubStatus      rootHubStatus;
   IOUSBHubPortStatus  portStatus;
+  bool                haveTransaction;
   UInt8               numPorts;
   UInt16              statusChangedBitmap;
   UInt32              bufferLengthDelta;
 
+  bzero(&lastTransaction, sizeof (lastTransaction));
+  haveTransaction = false;
   statusChangedBitmap = 0;
   numPorts            = 0;
 
@@ -564,23 +576,26 @@ void WiiOHCI::completeRootHubInterruptTransfer(bool abort) {
     statusChangedBitmap = HostToUSBWord(statusChangedBitmap);
   }
 
-  if (abort || ((statusChangedBitmap != 0) && (_rootHubInterruptTransactions[0].completion.action != NULL))) {
+  if (abort || (statusChangedBitmap != 0)) {
     //
     // Get first one and move all others forward.
     //
-    IOTakeLock(_rootHubInterruptTransLock);
-    lastTransaction = _rootHubInterruptTransactions[0];
-    for (unsigned int i = 1; i < ARRSIZE(_rootHubInterruptTransactions); i++) {
-      _rootHubInterruptTransactions[i - 1] = _rootHubInterruptTransactions[i];
-      if (_rootHubInterruptTransactions[i].completion.action == NULL) {
-        break;
+    IOLockLock(_rootHubInterruptTransLock);
+    if (_rootHubInterruptTransactions[0].completion.action != NULL) {
+      lastTransaction = _rootHubInterruptTransactions[0];
+      for (unsigned int i = 1; i < ARRSIZE(_rootHubInterruptTransactions); i++) {
+        _rootHubInterruptTransactions[i - 1] = _rootHubInterruptTransactions[i];
       }
+      bzero(&_rootHubInterruptTransactions[ARRSIZE(_rootHubInterruptTransactions) - 1],
+        sizeof (_rootHubInterruptTransactions[0]));
+      haveTransaction = true;
     }
-    IOUnlock(_rootHubInterruptTransLock);
+    IOLockUnlock(_rootHubInterruptTransLock);
+  }
 
+  if (haveTransaction) {
     //
     // Copy the change bitmap and complete the transfer.
-    //
     //
     bufferLengthDelta = lastTransaction.bufferLength;
     if (bufferLengthDelta > sizeof (statusChangedBitmap)) {
@@ -593,7 +608,7 @@ void WiiOHCI::completeRootHubInterruptTransfer(bool abort) {
     WIIDBGLOG("Completing root hub change interrupt transfer");
     lastTransaction.buffer->writeBytes(0, &statusChangedBitmap, bufferLengthDelta);
     Complete(lastTransaction.completion, abort ? kIOReturnAborted : kIOReturnSuccess, lastTransaction.bufferLength - bufferLengthDelta);
-  } else if (statusChangedBitmap == 0) {
+  } else if (!abort && (statusChangedBitmap == 0)) {
     //
     // Re-enable the interrupt, no actual change occurred here.
     //

@@ -11,6 +11,19 @@
 
 #include "WiiInterruptController.hpp"
 #include "WiiProcessorInterface.hpp"
+#include "WiiEspresso.hpp"
+
+static inline UInt32 WiiPICafeCoreOffset(UInt32 core) {
+  return core * 8;
+}
+
+static inline UInt32 WiiPICafeCurrentCore(void) {
+  UInt32 core = mfEspressoSPR(kEspressoSPR_PIR);
+  if (core >= kWiiPICafeCoreCount) {
+    core = 0;
+  }
+  return core;
+}
 
 OSDefineMetaClassAndStructors(WiiInterruptController, super);
 
@@ -138,14 +151,17 @@ IOReturn WiiInterruptController::handleInterrupt(void *refCon, IOService *nub, i
   IOInterruptVector *vector;
   UInt32            cause;
   UInt32            mask;
+  UInt32            core;
 
   //
   // Get interrupt status/mask and ensure no spurious interrupt.
   //
   if (_isCafe) {
-    cause = readCafeIntCause32(0); // TODO
-    mask  = readCafeIntMask32(0);
+    core = WiiPICafeCurrentCore();
+    cause = readCafeIntCause32(core);
+    mask  = readCafeIntMask32(core);
   } else {
+    core = 0;
     cause = readReg32(kWiiPIRegInterruptCause);
     mask  = readReg32(kWiiPIRegInterruptMask);
   }
@@ -188,6 +204,18 @@ IOReturn WiiInterruptController::handleInterrupt(void *refCon, IOService *nub, i
     vector->interruptActive = 0;
   }
 
+  //
+  // Acknowledge all asserted interrupts on the controller. Any interrupts
+  // will be re-asserted if the respective handlers did not clear the
+  // underlying hardware interrupts.
+  //
+  if (_isCafe) {
+    writeCafeIntCause32(core, cause);
+  } else {
+    writeReg32(kWiiPIRegInterruptCause, cause);
+  }
+  eieio();
+
   return kIOReturnSuccess;
 }
 
@@ -212,9 +240,11 @@ void WiiInterruptController::disableVectorHard(IOInterruptVectorNumber vectorNum
   UInt32 mask;
 
   if (_isCafe) {
-    mask = readCafeIntMask32(0);
-    mask &= ~(1 << vectorNumber);
-    writeCafeIntMask32(0, mask);
+    for (UInt32 core = 0; core < kWiiPICafeCoreCount; core++) {
+      mask = readCafeIntMask32(core);
+      mask &= ~(1 << vectorNumber);
+      writeCafeIntMask32(core, mask);
+    }
   } else {
     mask = readReg32(kWiiPIRegInterruptMask);
     mask &= ~(1 << vectorNumber);
@@ -228,16 +258,22 @@ void WiiInterruptController::disableVectorHard(IOInterruptVectorNumber vectorNum
 // Overrides IOInterruptController::enableVector().
 //
 // Unmasks and enables the specified vector.
+// Acknowledge before unmasking otherwise a false interrupt may occur when
+// IOInterruptEventSource re-enables the vector.
 //
 void WiiInterruptController::enableVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector) {
   UInt32 mask;
 
   if (_isCafe) {
-    mask = readCafeIntMask32(0);
-    mask |= (1 << vectorNumber);
-    writeCafeIntMask32(0, mask);
+    for (UInt32 core = 0; core < kWiiPICafeCoreCount; core++) {
+      mask = readCafeIntMask32(core);
+      writeCafeIntCause32(core, 1 << vectorNumber);
+      mask |= (1 << vectorNumber);
+      writeCafeIntMask32(core, mask);
+    }
   } else {
     mask = readReg32(kWiiPIRegInterruptMask);
+    writeReg32(kWiiPIRegInterruptCause, 1 << vectorNumber);
     mask |= (1 << vectorNumber);
     writeReg32(kWiiPIRegInterruptMask, mask);
   }

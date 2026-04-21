@@ -10,6 +10,7 @@
 
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/graphics/IOFramebuffer.h>
+#include "WiiGX2.hpp"
 #include "WiiCommon.hpp"
 
 typedef struct {
@@ -33,8 +34,7 @@ class WiiCafeFB : public IOFramebuffer {
   typedef IOFramebuffer super;
 
 private:
-  IOMemoryMap         *_memoryMap;
-  volatile void       *_baseAddr;
+  WiiGX2              *_gx2;
   IODeviceMemory      *_fbMemory;
 
   // Display and colors.
@@ -51,11 +51,23 @@ private:
   volatile UInt32           *_cursorHwPtr;
   IOPhysicalAddress         _cursorHwPhysAddr;
 
+  // Latte interrupt controller hook for GPU7_GC vector. We retain the
+  // IOService pointer so we can unregister on stop/free. The hook is
+  // installed lazily from ::start() via callPlatformFunction() and calls
+  // back into WiiCafeFB::ihTrampoline(), which drains the GPU IH ring.
+  IOService                 *_latteInterruptController;
+  bool                       _ihHandlerRegistered;
+  static void ihTrampoline(void *target, void *refCon, IOService *nub,
+                           int source);
+  void serviceIHRing(void);
+
   inline UInt32 readReg32(UInt32 offset) {
-    return OSReadBigInt32(_baseAddr, offset);
+    return (_gx2 != NULL) ? _gx2->readReg32(offset) : 0;
   }
   inline void writeReg32(UInt32 offset, UInt32 data) {
-    OSWriteBigInt32(_baseAddr, offset, data);
+    if (_gx2 != NULL) {
+      _gx2->writeReg32(offset, data);
+    }
   }
 
   void loadHardwareLUT(void);
@@ -65,6 +77,7 @@ public:
   // Overrides.
   //
   bool init(OSDictionary *dictionary = 0);
+  void free(void);
   bool start(IOService *provider);
   IOReturn enableController(void);
   IODeviceMemory *getApertureRange(IOPixelAperture aperture);
@@ -82,6 +95,14 @@ public:
   IOReturn getAttribute(IOSelect attribute, uintptr_t *value);
   IOReturn setCursorImage(void *cursorImage);
   IOReturn setCursorState(SInt32 x, SInt32 y, bool visible);
+
+  // Accessor used by WiiGX2UserClient to reach the underlying GPU engine.
+  WiiGX2 *getGX2(void) const { return _gx2; }
+
+  // IOUserClient factory for userspace command submission. Called by the
+  // IOKit framework from IOServiceOpen on behalf of a user task.
+  virtual IOReturn newUserClient(task_t owningTask, void *securityID,
+                                 UInt32 type, IOUserClient **handler);
 };
 
 #endif

@@ -13,6 +13,10 @@
 #include "WiiCommon.hpp"
 #include "WiiProcessorInterface.hpp"
 
+#ifdef WII_TIGER_IOINTERRUPT_API
+typedef int IOInterruptVectorNumber;
+#endif
+
 //
 // Represents the Wii platform interrupt controller.
 //

@@ -12,6 +12,7 @@
 #include "LatteInterruptController.hpp"
 #include "LatteRegs.hpp"
 #include "WiiProcessorInterface.hpp"
+#include "WiiEspresso.hpp"
 
 OSDefineMetaClassAndStructors(LatteInterruptController, super);
 
@@ -143,11 +144,14 @@ IOReturn LatteInterruptController::handleInterrupt(void *refCon, IOService *nub,
 
   //
   // Get interrupt status/mask and ensure no spurious interrupt.
+  // Read the registers for the current core.
   //
-  cause0 = readReg32(kWiiLatteIntRegPPCInterruptCause0);
-  cause1 = readReg32(kWiiLatteIntRegPPCInterruptCause1);
-  mask0  = readReg32(kWiiLatteIntRegPPCInterruptMask0);
-  mask1  = readReg32(kWiiLatteIntRegPPCInterruptMask1);
+  UInt32 core = mfEspressoSPR(kEspressoSPR_PIR);
+  UInt32 coreOffset = core * kWiiLatteIntPPCRegistersLength;
+  cause0 = readReg32(kWiiLatteIntRegPPCInterruptCause0 + coreOffset);
+  cause1 = readReg32(kWiiLatteIntRegPPCInterruptCause1 + coreOffset);
+  mask0  = readReg32(kWiiLatteIntRegPPCInterruptMask0 + coreOffset);
+  mask1  = readReg32(kWiiLatteIntRegPPCInterruptMask1 + coreOffset);
   if (((cause0 & mask0) == 0) && ((cause1 & mask1) == 0)) {
     return kIOReturnSuccess;
   }
@@ -198,8 +202,8 @@ IOReturn LatteInterruptController::handleInterrupt(void *refCon, IOService *nub,
   // Acknowledge all asserted interrupts on the controller. Any interrupts will be re-asserted if the
   // respective handlers did not clear the underlying hardware interrupts.
   //
-  writeReg32(kWiiLatteIntRegPPCInterruptCause0, cause0);
-  writeReg32(kWiiLatteIntRegPPCInterruptCause1, cause1);
+  writeReg32(kWiiLatteIntRegPPCInterruptCause0 + coreOffset, cause0);
+  writeReg32(kWiiLatteIntRegPPCInterruptCause1 + coreOffset, cause1);
   eieio();
 
   return kIOReturnSuccess;
@@ -224,14 +228,16 @@ int LatteInterruptController::getVectorType(IOInterruptVectorNumber vectorNumber
 //
 void LatteInterruptController::disableVectorHard(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector) {
   UInt32 mask;
+  UInt32 core = mfEspressoSPR(kEspressoSPR_PIR);
+  UInt32 coreOffset = core * kWiiLatteIntPPCRegistersLength;
   if (vectorNumber < kWiiLatteIntVectorPerRegCount) {
-    mask = readReg32(kWiiLatteIntRegPPCInterruptMask0);
+    mask = readReg32(kWiiLatteIntRegPPCInterruptMask0 + coreOffset);
     mask &= ~(1 << vectorNumber);
-    writeReg32(kWiiLatteIntRegPPCInterruptMask0, mask);
+    writeReg32(kWiiLatteIntRegPPCInterruptMask0 + coreOffset, mask);
   } else {
-    mask = readReg32(kWiiLatteIntRegPPCInterruptMask1);
+    mask = readReg32(kWiiLatteIntRegPPCInterruptMask1 + coreOffset);
     mask &= ~(1 << (vectorNumber - kWiiLatteIntVectorPerRegCount));
-    writeReg32(kWiiLatteIntRegPPCInterruptMask1, mask);
+    writeReg32(kWiiLatteIntRegPPCInterruptMask1 + coreOffset, mask);
   }
   eieio();
 }
@@ -244,16 +250,103 @@ void LatteInterruptController::disableVectorHard(IOInterruptVectorNumber vectorN
 //
 void LatteInterruptController::enableVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector) {
   UInt32 mask;
+  UInt32 core = mfEspressoSPR(kEspressoSPR_PIR);
+  UInt32 coreOffset = core * kWiiLatteIntPPCRegistersLength;
   if (vectorNumber < kWiiLatteIntVectorPerRegCount) {
-    mask = readReg32(kWiiLatteIntRegPPCInterruptMask0);
-    writeReg32(kWiiLatteIntRegPPCInterruptCause0, 1 << vectorNumber);
+    mask = readReg32(kWiiLatteIntRegPPCInterruptMask0 + coreOffset);
+    writeReg32(kWiiLatteIntRegPPCInterruptCause0 + coreOffset, 1 << vectorNumber);
     mask |= (1 << vectorNumber);
-    writeReg32(kWiiLatteIntRegPPCInterruptMask0, mask);
+    writeReg32(kWiiLatteIntRegPPCInterruptMask0 + coreOffset, mask);
   } else {
-    mask = readReg32(kWiiLatteIntRegPPCInterruptMask1);
-    writeReg32(kWiiLatteIntRegPPCInterruptCause1, 1 << (vectorNumber - 32));
+    mask = readReg32(kWiiLatteIntRegPPCInterruptMask1 + coreOffset);
+    writeReg32(kWiiLatteIntRegPPCInterruptCause1 + coreOffset, 1 << (vectorNumber - 32));
     mask |= (1 << (vectorNumber - kWiiLatteIntVectorPerRegCount));
-    writeReg32(kWiiLatteIntRegPPCInterruptMask1, mask);
+    writeReg32(kWiiLatteIntRegPPCInterruptMask1 + coreOffset, mask);
   }
   eieio();
+}
+
+//
+// Cross-kext helper: install a direct handler on a fixed vector index.
+// WiiGraphics uses this for the GPU7_GC vector because WiiGX2's device tree
+// node does not carry an IOInterruptSpecifier that points at this
+// controller.
+//
+IOReturn LatteInterruptController::registerDirectHandler(
+    IOInterruptVectorNumber vectorNumber,
+    void *target, IOInterruptHandler handler, void *refCon) {
+  IOInterruptVector *vector;
+
+  if (vectorNumber < 0 || vectorNumber >= kWiiLatteIntVectorCount ||
+      vectors == NULL || handler == NULL) {
+    return kIOReturnBadArgument;
+  }
+
+  vector = &vectors[vectorNumber];
+  IOLockLock(vector->interruptLock);
+  if (vector->interruptRegistered) {
+    IOLockUnlock(vector->interruptLock);
+    return kIOReturnBusy;
+  }
+  vector->handler             = handler;
+  vector->target              = target;
+  vector->refCon              = refCon;
+  vector->nub                 = NULL;
+  vector->source              = (int) vectorNumber;
+  vector->interruptDisabledSoft = 0;
+  vector->interruptDisabledHard = 0;
+  vector->interruptActive       = 0;
+  sync();
+  vector->interruptRegistered = 1;
+  IOLockUnlock(vector->interruptLock);
+
+  enableVector(vectorNumber, vector);
+  WIIDBGLOG("Registered direct handler on vector %d", (int) vectorNumber);
+  return kIOReturnSuccess;
+}
+
+IOReturn LatteInterruptController::unregisterDirectHandler(
+    IOInterruptVectorNumber vectorNumber) {
+  IOInterruptVector *vector;
+
+  if (vectorNumber < 0 || vectorNumber >= kWiiLatteIntVectorCount ||
+      vectors == NULL) {
+    return kIOReturnBadArgument;
+  }
+
+  vector = &vectors[vectorNumber];
+  disableVectorHard(vectorNumber, vector);
+
+  IOLockLock(vector->interruptLock);
+  vector->interruptRegistered = 0;
+  vector->handler             = NULL;
+  vector->target              = NULL;
+  vector->refCon              = NULL;
+  IOLockUnlock(vector->interruptLock);
+  return kIOReturnSuccess;
+}
+
+//
+// Generic cross-kext bridge so consumers (WiiGraphics, etc.) can hook Latte
+// interrupt vectors without statically linking against us. See the header
+// for the accepted function names.
+//
+IOReturn LatteInterruptController::callPlatformFunction(
+    const OSSymbol *functionName, bool waitForFunction,
+    void *param1, void *param2, void *param3, void *param4) {
+  if (functionName != NULL) {
+    if (functionName->isEqualTo(kLatteFunctionRegisterDirectIRQ)) {
+      return registerDirectHandler(
+        (IOInterruptVectorNumber)(uintptr_t) param1,
+        param2,
+        (IOInterruptHandler) param3,
+        param4);
+    }
+    if (functionName->isEqualTo(kLatteFunctionUnregisterDirectIRQ)) {
+      return unregisterDirectHandler(
+        (IOInterruptVectorNumber)(uintptr_t) param1);
+    }
+  }
+  return super::callPlatformFunction(functionName, waitForFunction,
+                                     param1, param2, param3, param4);
 }

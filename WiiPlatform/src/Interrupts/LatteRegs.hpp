@@ -40,4 +40,8 @@
 // Interrupt mask 32-63.
 #define kWiiLatteIntRegARMFIQMask1              0x44
 
+// Named Latte interrupt vectors (see wiiubrew Hardware/Latte_IRQs).
+// IRQ bank 0 covers vectors 0..31, bank 1 covers 32..63.
+#define kWiiLatteIntVectorGPU7GC                (32 + 11)
+
 #endif

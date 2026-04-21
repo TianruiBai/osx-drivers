@@ -24,6 +24,10 @@
 #define kWiiHollywoodICOffset               0x30
 // 32 supported interrupts on Hollywood.
 #define kWiiHollywoodICVectorCount          32
+// USB host-controller interrupt vectors.
+#define kWiiHollywoodICVectorEHCI           4
+#define kWiiHollywoodICVectorOHCI0_0        5
+#define kWiiHollywoodICVectorOHCI0_1        6
 // Interrupt cause for Broadway.
 #define kWiiHollywoodICBroadwayIRQCause     0x30
 // Interrupt mask for Broadway.

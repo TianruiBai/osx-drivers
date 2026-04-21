@@ -8,7 +8,37 @@
 #include <IOKit/IOPlatformExpert.h>
 #include "WiiOHCI.hpp"
 
+#define kWiiUSBBusNumberProperty      "USBBusNumber"
+#define kWiiOHCI0_0Location           "d050000"
+#define kWiiOHCI0_1Location           "d060000"
+#define kWiiOHCI1_0Location           "d130000"
+#define kWiiOHCI2_0Location           "d150000"
+
+#define kWiiOHCI0_0BusNumber          0x10
+#define kWiiOHCI0_1BusNumber          0x11
+#define kWiiOHCI1_0BusNumber          0x12
+#define kWiiOHCI2_0BusNumber          0x13
+
 OSDefineMetaClassAndStructors(WiiOHCI, super);
+
+static UInt32 WiiOHCIBusNumberForLocation(const char *location) {
+  if (location == NULL) {
+    return 0;
+  }
+  if (strcmp(location, kWiiOHCI0_0Location) == 0) {
+    return kWiiOHCI0_0BusNumber;
+  }
+  if (strcmp(location, kWiiOHCI0_1Location) == 0) {
+    return kWiiOHCI0_1BusNumber;
+  }
+  if (strcmp(location, kWiiOHCI1_0Location) == 0) {
+    return kWiiOHCI1_0BusNumber;
+  }
+  if (strcmp(location, kWiiOHCI2_0Location) == 0) {
+    return kWiiOHCI2_0BusNumber;
+  }
+  return 0;
+}
 
 //
 // Overrides IOUSBController::init().
@@ -20,6 +50,7 @@ bool WiiOHCI::init(OSDictionary *dictionary) {
   _mem2Allocator          = NULL;
   _baseAddr               = NULL;
   _interruptEventSource   = NULL;
+  _watchdogEventSource    = NULL;
   _isoInTimerWorkLoop     = NULL;
   _isoInTimerEventSource  = NULL;
   _isoOutTimerWorkLoop    = NULL;
@@ -34,6 +65,10 @@ bool WiiOHCI::init(OSDictionary *dictionary) {
 
   _endpointBufferHeadPtr  = NULL;
   _freeEndpointHeadPtr    = NULL;
+  _controlEndpointHeadPtr = NULL;
+  _controlEndpointTailPtr = NULL;
+  _controlQuirkEndpointPtr = NULL;
+  _controlQuirkTailTransferPtr = NULL;
 
   _freeBounceBufferHeadPtr      = NULL;
   _freeBounceBufferJumboHeadPtr = NULL;
@@ -67,6 +102,22 @@ bool WiiOHCI::init(OSDictionary *dictionary) {
   return super::init(dictionary);
 }
 
+IOService *WiiOHCI::probe(IOService *provider, SInt32 *score) {
+  UInt32 busNumber;
+  const char *location;
+
+  location = provider->getLocation();
+  busNumber = WiiOHCIBusNumberForLocation(location);
+  if (busNumber == 0) {
+    return NULL;
+  }
+
+  provider->setProperty(kWiiUSBBusNumberProperty, busNumber, 32);
+  WIISYSLOG("Probing OHCI controller on provider location %s, assigning %s=0x%X", location,
+    kWiiUSBBusNumberProperty, busNumber);
+  return super::probe(provider, score);
+}
+
 //
 // Overrides IOUSBController::UIMInitialize().
 //
@@ -80,9 +131,13 @@ IOReturn WiiOHCI::UIMInitialize(IOService *provider) {
   IOByteCount     length;
   UInt8           ohciRevision;
   UInt32          ohciControl;
+  UInt32          ohciDescA;
   UInt32          ohciFrameInterval;
   UInt32          ohciFrameLargestPacket;
+  UInt32          ohciIntEnable;
+  UInt32          ohciPowerOnDelayMS;
   UInt32          ohciRemoteWakeup;
+  UInt8           ohciPortCount;
   IOReturn        status;
 
   WiiSetDebugLocation(provider->getLocation());
@@ -96,7 +151,7 @@ IOReturn WiiOHCI::UIMInitialize(IOService *provider) {
     return kIOReturnNoResources;
   }
   _baseAddr = (volatile void *)_memoryMap->getVirtualAddress();
-  WIIDBGLOG("Mapped registers to %p (physical 0x%X), length: 0x%X", _baseAddr,
+  WIISYSLOG("UIMInitialize: mapped registers to %p (physical 0x%X), length 0x%X", _baseAddr,
     _memoryMap->getPhysicalAddress(), _memoryMap->getLength());
 
   //
@@ -164,6 +219,20 @@ IOReturn WiiOHCI::UIMInitialize(IOService *provider) {
     return kIOReturnNoResources;
   }
   _workLoop->addEventSource(_interruptEventSource);
+
+  _watchdogEventSource = IOTimerEventSource::timerEventSource(this,
+#if __MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_2
+    OSMemberFunctionCast(IOTimerEventSource::Action, this, &WiiOHCI::handleWatchdog)
+#else
+    (IOTimerEventSource::Action) &WiiOHCI::handleWatchdog
+#endif
+  );
+  if (_watchdogEventSource != NULL) {
+    _workLoop->addEventSource(_watchdogEventSource);
+    _watchdogEventSource->disable();
+  } else {
+    WIISYSLOG("Failed to create OHCI watchdog timer");
+  }
 
   //
   // Create memory cursor.
@@ -361,7 +430,25 @@ IOReturn WiiOHCI::UIMInitialize(IOService *provider) {
   //
   // Enable power to hub.
   //
+  ohciDescA = readReg32(kOHCIRegRhDescriptorA);
+  ohciPortCount = ohciDescA & kOHCIRegRhDescriptorANumPortsMask;
   writeReg32(kOHCIRegRhStatus, kOHCIRegRhStatusSetGlobalPower);
+  OSSynchronizeIO();
+
+  if (((ohciDescA & kOHCIRegRhDescriptorANoPowerSwitching) == 0)
+      && ((ohciDescA & kOHCIRegRhDescriptorAPowerModePerPort) != 0)) {
+    for (UInt8 port = 1; port <= ohciPortCount; port++) {
+      writeRootHubPort32(port, kOHCIRegRhPortStatusSetPortPower);
+    }
+    OSSynchronizeIO();
+  }
+
+  ohciPowerOnDelayMS = ((ohciDescA & kOHCIRegRhDescriptorAPowerOnToPowerGoodTimeMask)
+    >> kOHCIRegRhDescriptorAPowerOnToPowerGoodTimeShift) * 2;
+  if (ohciPowerOnDelayMS < 20) {
+    ohciPowerOnDelayMS = 20;
+  }
+  IOSleep(ohciPowerOnDelayMS);
 
   //
   // Root hub starts at 1.
@@ -371,12 +458,20 @@ IOReturn WiiOHCI::UIMInitialize(IOService *provider) {
   //
   // Enable interrupts.
   //
-  _interruptEventSource->enable();
-  writeReg32(kOHCIRegIntEnable, kOHCIRegIntEnableMasterInterruptEnable
-    | kOHCIRegIntEnableSchedulingOverrun | kOHCIRegIntEnableWritebackDoneHead
+  ohciIntEnable = kOHCIRegIntEnableSchedulingOverrun | kOHCIRegIntEnableWritebackDoneHead
     | kOHCIRegIntEnableResumeDetected | kOHCIRegIntEnableUnrecoverableError
-    | kOHCIRegIntEnableFrameNumberOverflow);
+    | kOHCIRegIntEnableFrameNumberOverflow | kOHCIRegIntEnableRootHubStatusChange;
+  writeReg32(kOHCIRegIntEnable, ohciIntEnable);
+  OSSynchronizeIO();
+  _interruptEventSource->enable();
+  writeReg32(kOHCIRegIntEnable, ohciIntEnable | kOHCIRegIntEnableMasterInterruptEnable);
+  OSSynchronizeIO();
+  if (_watchdogEventSource != NULL) {
+    _watchdogEventSource->enable();
+    _watchdogEventSource->setTimeoutUS(kWiiOHCIWatchdogRefreshUS);
+  }
 
+  WIISYSLOG("UIMInitialize: OHCI controller running, rev=0x%X", ohciRevision);
   return kIOReturnSuccess;
 }
 
@@ -387,6 +482,10 @@ IOReturn WiiOHCI::UIMInitialize(IOService *provider) {
 // Called from IOUSBController::stop().
 //
 IOReturn WiiOHCI::UIMFinalize(void) {
+  if (_watchdogEventSource != NULL) {
+    _watchdogEventSource->cancelTimeout();
+    _watchdogEventSource->disable();
+  }
   WIIDBGLOG("start");
   return kIOReturnSuccess;
 }

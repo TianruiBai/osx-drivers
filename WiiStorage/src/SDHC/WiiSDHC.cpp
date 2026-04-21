@@ -24,9 +24,14 @@ bool WiiSDHC::init(OSDictionary *dictionary) {
 
   _workLoop               = NULL;
   _commandGate            = NULL;
+  _interruptEventSource   = NULL;
+  _commandTimerSource     = NULL;
   _currentCommand         = NULL;
   _sdhcState              = kSDHCStateFree;
   _invalidateCacheFunc    = NULL;
+  _commandTimeoutRemainingUS = 0;
+  _isCardPresent          = false;
+  _isCardInitialized      = false;
 
   queue_init(&_commandQueue);
 
@@ -38,7 +43,6 @@ bool WiiSDHC::init(OSDictionary *dictionary) {
 //
 bool WiiSDHC::start(IOService *provider) {
   const OSSymbol  *functionSymbol;
-  WiiSDCommand    *sdCommand;
   IOReturn        status;
 
   if (!super::start(provider)) {
@@ -55,7 +59,7 @@ bool WiiSDHC::start(IOService *provider) {
     return false;
   }
   _baseAddr = (volatile void *)_memoryMap->getVirtualAddress();
-  WIIDBGLOG("Mapped registers to %p (physical 0x%X), length: 0x%X", _baseAddr,
+  WIISYSLOG("start: mapped SDHC registers to %p (physical 0x%X), length 0x%X", _baseAddr,
     _memoryMap->getPhysicalAddress(), _memoryMap->getLength());
 
   //
@@ -63,11 +67,13 @@ bool WiiSDHC::start(IOService *provider) {
   //
   functionSymbol = OSSymbol::withCString(kWiiFuncPlatformGetInvalidateCache);
   if (functionSymbol == NULL) {
+    WIISYSLOG("Failed to create symbol for cache invalidation lookup");
     return false;
   }
   status = getPlatform()->callPlatformFunction(functionSymbol, false, &_invalidateCacheFunc, 0, 0, 0);
   functionSymbol->release();
   if (status != kIOReturnSuccess) {
+    WIISYSLOG("callPlatformFunction(getInvalidateCache) failed: 0x%X", status);
     return false;
   }
 
@@ -75,6 +81,7 @@ bool WiiSDHC::start(IOService *provider) {
     WIISYSLOG("Failed to get cache invalidation function");
     return false;
   }
+  WIISYSLOG("start: cache invalidation function resolved");
 
   //
   // Initialize work loop and command pool.
@@ -109,6 +116,21 @@ bool WiiSDHC::start(IOService *provider) {
   }
   _workLoop->addEventSource(_interruptEventSource);
   _interruptEventSource->enable();
+  WIISYSLOG("start: interrupt source attached");
+
+  _commandTimerSource = IOTimerEventSource::timerEventSource(this,
+#if __MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_2
+  OSMemberFunctionCast(IOTimerEventSource::Action, this, &WiiSDHC::commandWatchdogFired)
+#else
+  (IOTimerEventSource::Action) &WiiSDHC::commandWatchdogFired
+#endif
+  );
+  if (_commandTimerSource == NULL) {
+    WIISYSLOG("Failed to create command watchdog timer");
+    return false;
+  }
+  _workLoop->addEventSource(_commandTimerSource);
+  _commandTimerSource->enable();
 
   //
   // DMA memory cursor.
@@ -144,11 +166,19 @@ bool WiiSDHC::start(IOService *provider) {
     WIISYSLOG("Failed to initialize controller with status: 0x%X", status);
     return false;
   }
+  WIISYSLOG("start: controller initialized (version=0x%X ps=0x%X caps=0x%X)",
+    readReg32(kSDHCRegHostControllerVersion),
+    readReg32(kSDHCRegPresentState),
+    readReg32(kSDHCRegCapabilities));
 
   status = initCard();
   if (status != kIOReturnSuccess) {
+    _isCardInitialized = false;
     WIISYSLOG("Failed to initialize card with status: 0x%X", status);
+    return false;
   }
+  _isCardInitialized = true;
+  WIISYSLOG("start: card initialized");
 
 
   WIIDBGLOG("SDHC version: 0x%X", readReg32(kSDHCRegHostControllerVersion));
@@ -163,7 +193,7 @@ bool WiiSDHC::start(IOService *provider) {
 
   registerService();
 
-  WIIDBGLOG("Initialized SD host controller");
+  WIISYSLOG("Initialized SD host controller");
   return true;
 }
 
@@ -184,6 +214,11 @@ void WiiSDHC::setStorageProperties(IOService *service) {
 IOReturn WiiSDHC::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt32 block, UInt32 nblks, IOStorageCompletion completion) {
   bool      isRead;
   IOReturn  status;
+
+  if (!_isCardInitialized || !isCardPresent()) {
+    WIISYSLOG("Attempted %s with no initialized card", (buffer != NULL) && (buffer->getDirection() == kIODirectionOut) ? "write" : "read");
+    return kIOReturnNoMedia;
+  }
 
   if (nblks > kWiiSDHCMaxTransferBlocks) {
     WIISYSLOG("Too many blocks %u attempted", nblks);
@@ -278,7 +313,7 @@ IOReturn WiiSDHC::reportMaxWriteTransfer(UInt64 blockSize, UInt64 *max) {
 // Reports the highest block that is addressable on the media.
 //
 IOReturn WiiSDHC::reportMaxValidBlock(UInt64 *maxBlock) {
-  if (!isCardPresent()) {
+  if (!_isCardInitialized || !isCardPresent()) {
     return kIOReturnNoMedia;
   }
 
@@ -292,10 +327,14 @@ IOReturn WiiSDHC::reportMaxValidBlock(UInt64 *maxBlock) {
 // Reports the current media state.
 //
 IOReturn WiiSDHC::reportMediaState(bool *mediaPresent, bool *changedState) {
-  WIIDBGLOG("start");
+  bool currentMediaPresent;
 
-  *mediaPresent = isCardPresent();
-  *changedState = *mediaPresent != _isCardPresent;
+  currentMediaPresent = _isCardInitialized && isCardPresent();
+  *mediaPresent = currentMediaPresent;
+  if (changedState != NULL) {
+    *changedState = currentMediaPresent != _isCardPresent;
+  }
+  _isCardPresent = currentMediaPresent;
   return kIOReturnSuccess;
 }
 
@@ -305,7 +344,7 @@ IOReturn WiiSDHC::reportMediaState(bool *mediaPresent, bool *changedState) {
 // Reports if the media is write protected.
 //
 IOReturn WiiSDHC::reportWriteProtection(bool *isWriteProtected) {
-  if (!isCardPresent()) {
+  if (!_isCardInitialized || !isCardPresent()) {
     return kIOReturnNoMedia;
   }
 
